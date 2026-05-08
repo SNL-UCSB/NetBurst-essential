@@ -1,0 +1,9 @@
+{
+  "clustering_csv": "<USER_Input>",
+  "tsfresh_csv": "<USER_Input>",
+  "out_csv": "<USER_Input>",
+  "cluster_variance_out_csv": "<USER_Input>",
+  "cluster_feature_rank_out_csv": "<USER_Input>",
+  "min_cluster_size": 10,
+  "job_name": "cluster_invariance_netburst_k5"
+}

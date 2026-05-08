@@ -1,0 +1,9 @@
+# Intended environment (e.g. Perlmutter): load conda + PyTorch 2.6.0, then install deps.
+#   module load conda && module load pytorch/2.6.0
+#   pip install -r requirements-faiss.txt
+faiss-cpu
+numpy
+pandas
+scipy
+pyarrow
+pymilvus

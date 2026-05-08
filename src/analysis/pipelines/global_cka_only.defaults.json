@@ -1,0 +1,22 @@
+{
+  "_comment": "All tunables visible for global_cka_fisher_metrics.run_from_config_dict (paths are placeholders).",
+  "reps_csv": "<USER_Input>",
+  "tsfresh_csv": "<USER_Input>",
+  "out_dir": "<USER_Input>",
+  "clustering_csv": null,
+  "id_cols": [
+    "ip",
+    "source_file"
+  ],
+  "id_ip": "ip",
+  "label_col": "label",
+  "repr_prefix": "repr_dim",
+  "filter_ip_suffix": null,
+  "cka_csv_name": "<USER_Input>",
+  "fisher_csv_name": "<USER_Input>",
+  "metrics_csv_name": "<USER_Input>",
+  "all_features_csv_name": "<USER_Input>",
+  "fisher_cdf_png": "cdf_global_fisher_ratio.png",
+  "cka_cdf_png": "cdf_global_cka_to_embedding.png",
+  "write_cdf_pngs": false
+}

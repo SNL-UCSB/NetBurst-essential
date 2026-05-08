@@ -1,0 +1,6 @@
+{
+  "_comment": "Simple global-cka overlay: required inputs only.",
+  "reps_csv": "<USER_Input>",
+  "tsfresh_csv": "<USER_Input>",
+  "out_dir": "<USER_Input>"
+}

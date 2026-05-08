@@ -1,0 +1,19 @@
+{
+  "description": "Optional keys for submit_cluster_invariance_sweep_from_json.py (merge into your sweep JSON). If plot_member_timeseries_input_parquet is set, member plots run by default; set run_member_timeseries_plots to false to disable. plot_member_timeseries_y_fixed_max sets a global ymax (e.g. 750000) for all member time-series plots. ip_suffix_filter restricts cluster_analysis to rows whose id-ip ends with the suffix (e.g. /32); clustering_phase.ip_suffix_filter overrides for clustering_analysis only.",
+  "write_per_cluster_cohens_d_cka": false,
+  "repr_prefix": "repr_dim",
+  "ip_suffix_filter": "<USER_Input>",
+  "run_member_timeseries_plots": null,
+  "plot_member_timeseries_input_parquet": "<USER_Input>",
+  "plot_member_timeseries_config_out_template": null,
+  "plot_member_timeseries_key_columns": "ip,source_file",
+  "plot_member_timeseries_value_column": "inbound",
+  "plot_member_timeseries_num_workers": 0,
+  "plot_member_timeseries_y_floor_zero": true,
+  "plot_member_timeseries_y_fixed_max": 750000,
+  "plot_member_timeseries_share_y_max_within_k": false,
+  "plot_member_timeseries_fisher_overlay": false,
+  "plot_member_timeseries_tsfresh_csv": null,
+  "plot_member_timeseries_fisher_top_n": 5,
+  "plot_member_timeseries_heatmap_filename": "feature_order_fisher.csv"
+}

@@ -1,0 +1,11 @@
+{
+  "_comment": "Simple cluster-features mode A: provide precomputed clustering_csv labels.",
+  "runner": "local",
+  "environment": "local",
+  "job_name": "netburst_cluster_features_external_labels",
+  "clustering_csv": "<USER_Input>",
+  "tsfresh_csv": "<USER_Input>",
+  "out_csv": "<USER_Input>",
+  "cluster_variance_out_csv": "<USER_Input>",
+  "cluster_feature_rank_out_csv": "<USER_Input>"
+}

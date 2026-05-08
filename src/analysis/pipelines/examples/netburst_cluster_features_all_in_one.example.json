@@ -1,0 +1,22 @@
+{
+  "_comment": "All-in-one variant: run clustering, cluster-features, member plots, then normalized CKA x Cohen (top_k=10).",
+  "runner": "local",
+  "environment": "local",
+  "job_name": "netburst_cluster_features_all_in_one",
+  "run_clustering_phase": true,
+  "clustering_phase": {
+    "data_csv": "<USER_Input>",
+    "n_clusters": 500
+  },
+  "tsfresh_csv": "<USER_Input>",
+  "out_csv": "<USER_Input>",
+  "cluster_variance_out_csv": "<USER_Input>",
+  "cluster_feature_rank_out_csv": "<USER_Input>",
+  "write_cluster_member_samples": true,
+  "cluster_members_parent_dir": "<USER_Input>",
+  "write_per_cluster_cohens_d_cka": true,
+  "run_member_timeseries_plots": true,
+  "plot_member_timeseries_input_parquet": "<USER_Input>",
+  "run_normalized_cka_cohen": true,
+  "normalized_cka_cohen_top_k": 10
+}

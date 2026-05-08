@@ -1,0 +1,9 @@
+{
+  "_comment": "Keys for compute_normalized_cka_cohen_importance.py (full sweep schema)",
+  "k_values": [],
+  "run_values": [],
+  "seed_values": [],
+  "cluster_members_parent_dir_template": "<USER_Input>",
+  "cohens_d_by_cluster_out_csv_template": "<USER_Input>",
+  "top_k": 10
+}

@@ -1,0 +1,7 @@
+{
+  "_comment": "Minimal anisotropy run on representation CSV from twin_ip extraction.",
+  "reps_csv": "<USER_Input>",
+  "out": "<USER_Input>",
+  "repr_prefix": "repr_dim",
+  "group_by_source": false
+}

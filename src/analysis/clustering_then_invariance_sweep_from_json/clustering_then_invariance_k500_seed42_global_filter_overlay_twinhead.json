@@ -1,0 +1,65 @@
+{
+  "_comment": "Single slice: k=500, seed=42, run_1. Same netburst paths as clustering_then_invariance_global_filter_overlay_netburst_example_20260325.json. Submit: python3 cluster_invariance_sweep_from_json/submit_cluster_invariance_sweep_from_json.py --json clustering_then_invariance_sweep_from_json/clustering_then_invariance_k500_seed42_global_filter_overlay_netburst.json",
+  "sweep_job_name": "clust_then_inv_k500_seed42_overlay_netburst",
+  "submission_style": "multi_node_per_run_parallel_k",
+  "runner": "slurm",
+  "environment": "nersc",
+  "clustering_phase": {
+    "enabled": false
+  },
+  "k_values": [
+    500
+  ],
+  "run_values": [
+    1
+  ],
+  "seed_values": [
+    42
+  ],
+  "job_name_template": "<USER_Input>",
+  "clustering_labels_template": "<USER_Input>",
+  "tsfresh_csv": "<USER_Input>",
+  "out_csv_template": "<USER_Input>",
+  "cluster_variance_out_csv_template": "<USER_Input>",
+  "cluster_feature_rank_out_csv_template": "<USER_Input>",
+  "write_cluster_member_samples": true,
+  "cluster_members_parent_dir_template": "<USER_Input>",
+  "member_sample_n": 5,
+  "member_sample_seed": 42,
+  "write_per_cluster_cohens_d_cka": true,
+  "global_filter_overlay_plots": true,
+  "precursor_cka_embedding": {
+    "reps_csv": "<USER_Input>"
+  },
+  "global_filter_mode": "fisher_min",
+  "global_fisher_min": 0.1,
+  "_comment_global_cka": "<USER_Input>",
+  "overlay_local_top_k": 10,
+  "label_col": "label",
+  "global_cka_feature_col": "tsfresh_feature",
+  "run_member_timeseries_plots": true,
+  "plot_member_timeseries_input_parquet": "<USER_Input>",
+  "plot_member_timeseries_y_fixed_max": 750000,
+  "input_staging": {
+    "enabled": true,
+    "shm_root": "<USER_Input>",
+    "stage_dir_prefix": "<USER_Input>",
+    "debug_echo": false
+  },
+  "workdir": "<USER_Input>",
+  "multi_node_log_dir": "<USER_Input>",
+  "min_cluster_size": 10,
+  "id_ip": "ip",
+  "id_source_file": "source_file",
+  "ip_suffix_filter": "<USER_Input>",
+  "modules": [
+    "conda",
+    "pytorch/2.6.0"
+  ],
+  "sbatch_multi_node": {
+    "queue": "premium",
+    "account": "<SLURM_ACCOUNT>",
+    "time": "24:00:00",
+    "cpus_per_task": 256
+  }
+}

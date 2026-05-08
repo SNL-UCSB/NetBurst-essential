@@ -1,0 +1,160 @@
+def get_detailed_representations():
+    """
+    Extract detailed representations with additional metadata and optional raw data.
+    More comprehensive version that includes series metadata and optional raw series data.
+    """
+    parser = argparse.ArgumentParser()
+    parser.add_argument("parquet_root", help="Root path to parquet data")
+    parser.add_argument("--model", default="amazon/chronos-t5-small", 
+                        help="Path to trained model directory")
+    parser.add_argument("--batch_size", type=int, default=16)
+    parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument("--max_len", type=int, default=None, 
+                        help="Maximum length of series to consider")
+    parser.add_argument("--nonhierarchical", action="store_true",
+                        help="If set, use non-hierarchical data loading")
+    parser.add_argument("--output_csv", default="detailed_representations.csv",
+                        help="Output CSV file path")
+    parser.add_argument("--isCSV", type=int, default=None)
+    parser.add_argument("--outbound_only", action="store_true",
+                        help="Use outbound data only for hierarchical loading")
+    parser.add_argument("--include_raw_data", action="store_true",
+                        help="Include raw series data in output (as JSON strings)")
+    parser.add_argument("--include_token_level", action="store_true",
+                        help="Include token-level representations (not just series-level)")
+    args = parser.parse_args()
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
+
+    # Load data using the same format as main()
+    if args.isCSV:
+        # Load from CSV
+        df = pd.read_csv(args.parquet_root)
+        all_series = df.values.tolist()
+        series_metadata = [{"source": "csv", "row_idx": i} for i in range(len(all_series))]
+    else:
+        all_series = load_cleaned_series(
+            args.parquet_root,
+            min_len=10,
+            max_len=args.max_len,
+            limit=args.limit,
+            nonHierarchical=args.nonhierarchical,
+            outbound_only=args.outbound_only
+        )
+        series_metadata = [{"source": "parquet", "series_idx": i} for i in range(len(all_series))]
+
+    print(f"Loaded {len(all_series)} series")
+
+    # Load the trained model
+    print("Loading trained model...")
+    
+    # Load boundaries from the model directory
+    with open(os.path.join(args.model, "boundaries.pkl"), "rb") as f:
+        boundaries = pickle.load(f)
+
+    # Create the predictor with trained weights
+    predictor = ChronosBinPredictor(
+        boundaries, 
+        "<data-root>/models--amazon--chronos-t5-small/snapshots/476a71b73e6205f7987e811a81f355b9791c9256", 
+        device
+    ).to(device)
+
+    # Load the fine-tuned weights
+    state = torch.load(os.path.join(args.model, "chronos_best.pt"), map_location=device)
+    state = strip_prefix_if_present(state, ["model.model.", "model."])
+    predictor.model.model.load_state_dict(state, strict=True)
+    predictor.model.eval()
+
+    print("Model loaded successfully")
+
+    # Process data in batches to extract representations
+    results_data = []
+    tokenizer_state = None
+    
+    print("Extracting detailed representations...")
+    
+    with torch.no_grad():
+        for i in range(0, len(all_series), args.batch_size):
+            batch_series = all_series[i:i+args.batch_size]
+            batch_metadata = series_metadata[i:i+args.batch_size]
+            
+            try:
+                # Convert to numpy array format as expected by pipeline.embed()
+                batch_data = []
+                for series in batch_series:
+                    if isinstance(series, list):
+                        batch_data.append(np.array(series, dtype=np.float32))
+                    else:
+                        batch_data.append(np.array(series, dtype=np.float32))
+                
+                # Convert to tensor format
+                batch_np = np.array(batch_data, dtype=np.float32)
+                batch_tensor = torch.from_numpy(batch_np).to(device)
+                
+                # Use pipeline.embed() method like in the reference implementation
+                batch_emb, tokenizer_state = predictor.pipeline.embed(
+                    batch_tensor,
+                )
+                
+                # Extract embeddings - shape is [B, T, D]
+                embeddings = batch_emb.detach().cpu().numpy()
+                
+                # Process each series in the batch
+                for j, (series, metadata) in enumerate(zip(batch_series, batch_metadata)):
+                    series_length = len(series)
+                    series_embeddings = embeddings[j]  # [T, D]
+                    
+                    # Series-level representation (last token like in reference)
+                    series_repr = series_embeddings[-1, :]  # [D] - last token embedding
+                    
+                    # Prepare result dictionary
+                    result = {
+                        'series_id': i + j,
+                        'series_length': series_length,
+                        'n_tokens': series_embeddings.shape[0],
+                        **metadata
+                    }
+                    
+                    # Add series-level representation
+                    for dim_idx, val in enumerate(series_repr):
+                        result[f'repr_dim_{dim_idx}'] = val
+                    
+                    # Add raw data if requested
+                    if args.include_raw_data:
+                        import json
+                        result['raw_series'] = json.dumps(series)
+                    
+                    # Add token-level representations if requested
+                    if args.include_token_level:
+                        # Save as comma-separated string for each dimension
+                        for dim_idx in range(series_embeddings.shape[1]):
+                            dim_values = series_embeddings[:, dim_idx]
+                            result[f'token_repr_dim_{dim_idx}'] = ','.join(map(str, dim_values))
+                    
+                    results_data.append(result)
+                
+                if (i // args.batch_size + 1) % 10 == 0:
+                    print(f"Processed {i + len(batch_series)}/{len(all_series)} series")
+                    
+            except Exception as e:
+                print(f"Error processing batch {i//args.batch_size}: {e}")
+                # Skip this batch and continue
+                continue
+
+    # Convert to DataFrame and save to CSV
+    print("Saving detailed representations to CSV...")
+    
+    df_results = pd.DataFrame(results_data)
+    df_results.to_csv(args.output_csv, index=False)
+    
+    print(f"Saved {len(results_data)} detailed representations to {args.output_csv}")
+    print(f"DataFrame shape: {df_results.shape}")
+    print(f"Columns: {list(df_results.columns)}")
+    
+    # Print some statistics
+    if 'repr_dim_0' in df_results.columns:
+        repr_cols = [col for col in df_results.columns if col.startswith('repr_dim_')]
+        print(f"Representation dimensions: {len(repr_cols)}")
+        print(f"Average series length: {df_results['series_length'].mean():.2f}")
+        print(f"Average tokens: {df_results['n_tokens'].mean():.2f}")

@@ -1,0 +1,222 @@
+def get_representations_with_ip():
+    """
+    Extract representations specifically for IP-based data with IP information preserved.
+    Uses the same TwinHeadChronosPredictor model and data format as main().
+    Assumes parquet data contains 'bi' and 'ibg' columns with IP metadata.
+    """
+    parser = argparse.ArgumentParser()
+    parser.add_argument("parquet_root", help="Root path to parquet data")
+    parser.add_argument("--model", default="amazon/chronos-t5-small", 
+                        help="Path to trained model directory")
+    parser.add_argument("--batch_size", type=int, default=16)
+    parser.add_argument("--ips_csv", default="IpsToConsider.csv",
+                        help="CSV file with IPs to process")
+    parser.add_argument("--output_csv", default="ip_representations.csv",
+                        help="Output CSV file path")
+    parser.add_argument("--num_tokens", type=int, default=512,
+                        help="Effective number of quantile bins per stream")
+    parser.add_argument("--mse_mode", choices=["bin", "centers"], default="bin",
+                        help="How to compute MSE")
+    parser.add_argument("--center_clip", type=float, default=1e6,
+                        help="Clamp value for center-based MSE")
+    parser.add_argument(
+        "--ip_suffix_filter",
+        type=str,
+        default=None,
+        help="If set, only keep rows whose ip string ends with this suffix (e.g. '/32' for host-only CIDRs).",
+    )
+    args = parser.parse_args()
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
+
+    # Load specific IPs if provided
+    allowed_ips = None
+    if os.path.exists(args.ips_csv):
+        tmp_df = pd.read_csv(args.ips_csv)
+        if "ip" in tmp_df.columns:
+            allowed_ips = set(tmp_df["ip"])
+            print(f"Loaded {len(allowed_ips)} allowed IPs from {args.ips_csv}")
+    
+    if allowed_ips is None:
+        print("No IP filter found, processing all IPs")
+
+    # Load (bi, ibg) pairs with IP information preserved
+    def load_ibg_bi_with_ip(
+        parquet_root,
+        allowed_ips=None,
+        min_len=10,
+        ip_suffix_filter: Optional[str] = None,
+    ):
+        """Load (bi, ibg) pairs preserving IP information like main() function"""
+        spark = SparkSession.builder \
+            .appName("IP-Representations-Load") \
+            .config("spark.driver.memory", "200g") \
+            .config("spark.driver.maxResultSize", "200g") \
+            .getOrCreate()
+        
+        df = spark.read.option("recursiveFileLookup", "true").parquet(parquet_root)
+        print("Available columns:", df.columns)
+        
+        # Filter by allowed IPs if provided
+        if allowed_ips and "ip" in df.columns:
+            df = df.filter(F.col("ip").isin(list(allowed_ips)))
+
+        if ip_suffix_filter:
+            if "ip" not in df.columns:
+                print("Warning: --ip_suffix_filter set but parquet has no 'ip' column; suffix filter skipped.")
+            else:
+                df = df.filter(F.col("ip").endswith(ip_suffix_filter))
+                print(f"Applied ip suffix filter: endswith({ip_suffix_filter!r})")
+        
+        # Ensure we have bi and ibg columns
+        if "bi" not in df.columns or "ibg" not in df.columns:
+            raise ValueError("Parquet must contain 'bi' and 'ibg' columns for TwinHeadChronosPredictor")
+        
+        # Filter for valid bi/ibg pairs with equal lengths, preserving IP info
+        df_clean = df.select(
+            F.col("ip") if "ip" in df.columns else F.lit("unknown").alias("ip"),
+            F.col("source_file") if "source_file" in df.columns else F.lit("unknown").alias("source_file"),
+            F.when(F.col("bi").isNotNull(), F.col("bi")).otherwise(F.array().cast("array<double>")).alias("bi"),
+            F.when(F.col("ibg").isNotNull(), F.col("ibg")).otherwise(F.array().cast("array<double>")).alias("ibg"),
+        ).filter(
+            (F.size("bi") >= F.lit(min_len)) & 
+            (F.size("ibg") >= F.lit(min_len)) & 
+            (F.size("bi") == F.size("ibg"))
+        )
+        
+        # Collect results with IP information
+        results = df_clean.select("ip", "source_file", "bi", "ibg").collect()
+        spark.stop()
+        
+        return [(row["ip"], row["source_file"], (list(map(float, row["bi"])), list(map(float, row["ibg"])))) 
+                for row in results]
+
+    ip_series_data = load_ibg_bi_with_ip(
+        args.parquet_root,
+        allowed_ips,
+        min_len=10,
+        ip_suffix_filter=args.ip_suffix_filter,
+    )
+    print(f"Loaded {len(ip_series_data)} IP-(bi,ibg) pairs")
+
+    # Load boundaries like inference_auto_regression, then use from_pretrained
+    print("Loading trained model...")
+    try:
+        with open(os.path.join(args.model, "boundaries_bi.pkl"), "rb") as f:
+            boundaries_bi = pickle.load(f)
+        with open(os.path.join(args.model, "boundaries_ibg.pkl"), "rb") as f:
+            boundaries_ibg = pickle.load(f)
+    except FileNotFoundError as e:
+        raise FileNotFoundError(
+            f"Twin-head boundaries not found under {args.model}. Expected boundaries_bi.pkl and boundaries_ibg.pkl"
+        ) from e
+
+    predictor = TwinHeadChronosPredictor.from_pretrained(args.model, device)
+    predictor.eval()
+    try:
+        with torch.no_grad():
+            hn_bi = float(predictor.head_bi.weight.norm().item())
+            hn_ibg = float(predictor.head_ibg.weight.norm().item())
+        print(f"Head norms — BI: {hn_bi:.4f}, IBG: {hn_ibg:.4f}")
+    except Exception:
+        pass
+
+    # Extract representations using model's internal embeddings
+    results_data = []
+    print("Extracting IP-based representations...")
+    t_repr_start = time.perf_counter()
+
+    with torch.no_grad():
+        for i in range(0, len(ip_series_data), args.batch_size):
+            print(f"Processing batch {i//args.batch_size + 1}...")
+            batch_data = ip_series_data[i:i+args.batch_size]
+            batch_ips = [ip for ip, _, _ in batch_data]
+            batch_source_files = [sf for _, sf, _ in batch_data]
+            batch_pairs = [(bi, ibg) for _, _, (bi, ibg) in batch_data]
+            
+            try:
+                # Prepare contexts as in inference_auto_regression
+                bi_series, ibg_series = predictor._prep_context(batch_pairs)
+
+                bi_tensors = [torch.tensor(bi, dtype=torch.float32) for bi in bi_series]
+                ibg_tensors = [torch.tensor(ibg, dtype=torch.float32) for ibg in ibg_series]
+
+                # Tokenize both streams
+                ctx_bi = predictor.pipeline._prepare_and_validate_context(context=bi_tensors)
+                ids_bi, mask_bi, _ = predictor.tokenizer_bi.context_input_transform(ctx_bi)
+
+                ctx_ibg = predictor.pipeline._prepare_and_validate_context(context=ibg_tensors)
+                ids_ibg, mask_ibg, _ = predictor.tokenizer_ibg.context_input_transform(ctx_ibg)
+
+                # Combined valid mask
+                comb_mask = (mask_bi & mask_ibg).to(device)
+
+                # Get hidden states using the same combined forward path
+                dummy = torch.empty((ids_bi.size(0), 1), dtype=torch.long, device=device)
+                _, hidden = predictor.model.forward_with_embeddings(
+                    input_ids1=ids_bi.to(device),
+                    input_ids2=ids_ibg.to(device),
+                    attention_mask=comb_mask,
+                    decoder_input_ids=dummy,
+                    type_id=0,
+                    cross_attend=predictor.use_cross_attn,
+                )
+                hidden = hidden.squeeze(1)  # [B,T,D]
+
+                # Series representation = last token embedding (consistent with AR)
+                series_representations = hidden[:, -1, :].detach().cpu().numpy()  # [B, D]
+                
+                # Process each IP-series pair
+                for j, (ip, source_file, (bi_series, ibg_series)) in enumerate(zip(batch_ips, batch_source_files, batch_pairs)):
+                    series_repr = series_representations[j]  # [2*d_model]
+                    
+                    # Prepare result
+                    result = {
+                        'ip': ip,
+                        'source_file': source_file,
+                        'series_id': i + j,
+                        'bi_length': len(bi_series),
+                        'ibg_length': len(ibg_series),
+                        'n_tokens': hidden.shape[1],
+                    }
+                    
+                    # Add representation dimensions
+                    for dim_idx, val in enumerate(series_repr):
+                        result[f'repr_dim_{dim_idx}'] = val
+                    
+                    results_data.append(result)
+                
+                if (i // args.batch_size + 1) % 10 == 0:
+                    print(f"Processed {i + len(batch_data)}/{len(ip_series_data)} IP-(bi,ibg) pairs")
+                    
+            except Exception as e:
+                print(f"Error processing batch {i//args.batch_size}: {e}")
+                import traceback
+                traceback.print_exc()
+                continue
+
+    t_repr_elapsed = time.perf_counter() - t_repr_start
+    n_in = len(ip_series_data)
+    n_out = len(results_data)
+    rate = (n_in / t_repr_elapsed) if t_repr_elapsed > 0 else float("nan")
+    print(
+        f"Representation extraction wall time (after model load and dataset prep): "
+        f"{t_repr_elapsed:.3f} s; input series {n_in}, representations computed {n_out} "
+        f"({rate:.2f} input series/s)"
+    )
+
+    # Save results
+    print("Saving IP representations to CSV...")
+    
+    df_results = pd.DataFrame(results_data)
+    df_results.to_csv(args.output_csv, index=False)
+    
+    print(f"Saved {len(results_data)} IP representations to {args.output_csv}")
+    print(f"DataFrame shape: {df_results.shape}")
+    print(f"Unique IPs processed: {df_results['ip'].nunique()}")
+    
+    if 'repr_dim_0' in df_results.columns:
+        repr_cols = [col for col in df_results.columns if col.startswith('repr_dim_')]
+        print(f"Representation dimensions: {len(repr_cols)}")
+

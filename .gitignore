@@ -1,0 +1,42 @@
+# Runtime outputs and experiment artifacts
+outputs/
+**/outputs/
+*.pkl
+*.npy
+*.npz
+*.faiss
+*.parquet
+final_metrics*.json
+per_example_metrics*.csv
+bi_rank*.pkl
+ibg_rank*.pkl
+src/train/netburst_ibgbi_manifest_*/
+
+# Checkpoints (keep only placeholders)
+checkpoints/
+**/checkpoints/**
+!src/train/checkpoints/.gitkeep
+!**/checkpoints/**/.gitkeep
+
+# Logs
+*.log
+*.out
+*.err
+logs/
+**/logs/
+
+# Python cache/build artifacts
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# Local environment/editor files
+.env
+.venv/
+venv/
+.DS_Store

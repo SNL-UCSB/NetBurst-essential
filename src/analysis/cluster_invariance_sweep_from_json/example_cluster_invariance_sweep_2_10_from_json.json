@@ -1,0 +1,43 @@
+{
+  "sweep_job_name": "clust_sweep_2_10",
+  "submission_style": "single_job_parallel",
+  "k_values": [
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10
+  ],
+  "job_name_template": "<USER_Input>",
+  "clustering_labels_template": "<USER_Input>",
+  "tsfresh_csv": "<USER_Input>",
+  "out_csv_template": "<USER_Input>",
+  "cluster_variance_out_csv_template": "<USER_Input>",
+  "cluster_feature_rank_out_csv_template": "<USER_Input>",
+  "write_cluster_member_samples": true,
+  "member_sample_n": 5,
+  "member_sample_seed": 42,
+  "min_cluster_size": 10,
+  "id_ip": "ip",
+  "id_source_file": "source_file",
+  "sbatch_separate": {
+    "queue": "premium",
+    "account": "<SLURM_ACCOUNT>",
+    "time": "1:00:00",
+    "cpus_per_task": 8
+  },
+  "sbatch_parallel": {
+    "queue": "premium",
+    "account": "<SLURM_ACCOUNT>",
+    "time": "2:00:00",
+    "cpus_per_task": 32
+  },
+  "modules": [
+    "conda",
+    "pytorch/2.6.0"
+  ]
+}

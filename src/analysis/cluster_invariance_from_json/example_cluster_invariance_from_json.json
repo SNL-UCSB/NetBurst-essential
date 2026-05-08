@@ -1,0 +1,14 @@
+{
+  "clustering_csv": "<USER_Input>",
+  "tsfresh_csv": "<USER_Input>",
+  "out_csv": "<USER_Input>",
+  "cluster_variance_out_csv": "<USER_Input>",
+  "cluster_feature_rank_out_csv": "<USER_Input>",
+  "write_cluster_member_samples": true,
+  "cluster_members_parent_dir": "<USER_Input>",
+  "member_sample_n": 5,
+  "member_sample_seed": 42,
+  "write_per_cluster_cohens_d_cka": false,
+  "repr_prefix": "repr_dim",
+  "job_name": "cluster_invariance_k500"
+}

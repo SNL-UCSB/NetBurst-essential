@@ -1,0 +1,63 @@
+{
+  "sweep_job_name": "clust_inv_parK_full_pipeline",
+  "submission_style": "multi_node_per_run_parallel_k",
+  "runner": "slurm",
+  "environment": "nersc",
+  "k_values": [
+    10,
+    100,
+    500,
+    1000
+  ],
+  "run_values": [
+    1,
+    2,
+    3,
+    4,
+    5
+  ],
+  "seed_values": [
+    42
+  ],
+  "job_name_template": "<USER_Input>",
+  "clustering_labels_template": "<USER_Input>",
+  "tsfresh_csv": "<USER_Input>",
+  "out_csv_template": "<USER_Input>",
+  "cluster_variance_out_csv_template": "<USER_Input>",
+  "cluster_feature_rank_out_csv_template": "<USER_Input>",
+  "write_cluster_member_samples": true,
+  "cluster_members_parent_dir_template": "<USER_Input>",
+  "member_sample_n": 5,
+  "member_sample_seed": 42,
+  "write_per_cluster_cohens_d_cka": true,
+  "repr_prefix": "repr_dim",
+  "run_member_timeseries_plots": true,
+  "plot_member_timeseries_input_parquet": "<USER_Input>",
+  "plot_member_timeseries_config_out_template": "<USER_Input>",
+  "plot_member_timeseries_key_columns": "ip,source_file",
+  "plot_member_timeseries_value_column": "inbound",
+  "plot_member_timeseries_num_workers": 0,
+  "input_staging": {
+    "enabled": true,
+    "shm_root": "<USER_Input>",
+    "stage_dir_prefix": "<USER_Input>",
+    "debug_echo": true,
+    "_comment": "STAGE_DIR is set and exported in the generated Slurm script; inputs are copied there before cluster_analysis runs."
+  },
+  "multi_node_debug": true,
+  "workdir": "<USER_Input>",
+  "multi_node_log_dir": "<USER_Input>",
+  "min_cluster_size": 10,
+  "id_ip": "ip",
+  "id_source_file": "source_file",
+  "modules": [
+    "conda",
+    "pytorch/2.6.0"
+  ],
+  "sbatch_multi_node": {
+    "queue": "premium",
+    "account": "<SLURM_ACCOUNT>",
+    "time": "12:00:00",
+    "cpus_per_task": 256
+  }
+}

@@ -1,0 +1,71 @@
+{
+  "_comment": "Full pipeline: per node, sequential clustering_analysis.py for each K, then parallel invariance (cluster_analysis.py + rank json). clustering_labels_template must match --out-dir layout (parent of k_{k}_labels.csv). Default kmeans_metric is cosine; override as needed. On NERSC, run the driver via ./run_submit_with_nersc_modules.sh (loads conda + pytorch/2.6.0) or: module load conda pytorch/2.6.0 && python3 submit_clustering_then_invariance_sweep_from_json.py --json ...",
+  "sweep_job_name": "clust_then_inv_parK",
+  "submission_style": "multi_node_per_run_parallel_k",
+  "runner": "slurm",
+  "environment": "nersc",
+  "clustering_phase": {
+    "enabled": true,
+    "data_csv": "<USER_Input>",
+    "netburst_root": "<USER_Input>",
+    "kmeans_metric": "cosine",
+    "minimal_cleaning": true
+  },
+  "k_values": [
+    10,
+    100,
+    500,
+    1000,
+    5000,
+    10000
+  ],
+  "run_values": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10
+  ],
+  "seed_values": [
+    42
+  ],
+  "job_name_template": "<USER_Input>",
+  "clustering_labels_template": "<USER_Input>",
+  "tsfresh_csv": "<USER_Input>",
+  "out_csv_template": "<USER_Input>",
+  "cluster_variance_out_csv_template": "<USER_Input>",
+  "cluster_feature_rank_out_csv_template": "<USER_Input>",
+  "write_cluster_member_samples": true,
+  "cluster_members_parent_dir_template": "<USER_Input>",
+  "member_sample_n": 5,
+  "member_sample_seed": 42,
+  "plot_member_timeseries_input_parquet": "<USER_Input>",
+  "plot_member_timeseries_y_fixed_max": 750000,
+  "input_staging": {
+    "enabled": true,
+    "shm_root": "<USER_Input>",
+    "stage_dir_prefix": "<USER_Input>",
+    "debug_echo": false
+  },
+  "workdir": "<USER_Input>",
+  "multi_node_log_dir": "<USER_Input>",
+  "min_cluster_size": 10,
+  "id_ip": "ip",
+  "id_source_file": "source_file",
+  "ip_suffix_filter": "<USER_Input>",
+  "modules": [
+    "conda",
+    "pytorch/2.6.0"
+  ],
+  "sbatch_multi_node": {
+    "queue": "premium",
+    "account": "<SLURM_ACCOUNT>",
+    "time": "24:00:00",
+    "cpus_per_task": 256
+  }
+}

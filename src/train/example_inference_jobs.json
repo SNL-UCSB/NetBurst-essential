@@ -1,0 +1,36 @@
+{
+  "jobs": [
+    {
+      "name": "ip_1s_main",
+      "parquet_root": "<data-root>/output/splits_1s_ip/ibgbi_test",
+      "models": [
+        "<repo-root>/src/train/checkpoints/netburst_ibgbi_manifest/NetBurstIBGBI_ip_1s_main_netburst_CE_intK_manifest",
+        "<repo-root>/src/train/checkpoints/netburst_ibgbi_manifest/NetBurstIBGBI_ip_1s_main_netburst_CE_intK_manifest__m1"
+      ],
+      "nz_thresh": 100,
+      "bi_thresh": 100
+    },
+    {
+      "name": "subnet_1s_main",
+      "parquet_root": "<data-root>/output/splits_1s_subnet/ibgbi_test",
+      "models": [
+        "<repo-root>/src/train/checkpoints/netburst_ibgbi_manifest/NetBurstIBGBI_subnet_1s_main_netburst_CE_intK_manifest"
+      ],
+      "nz_thresh": 100,
+      "bi_thresh": 100
+    },
+    {
+      "name": "service_100ms_mawi",
+      "parquet_root": "<data-root>/output/splits_100ms_mawi_service/ibgbi_test",
+      "models": [
+        "<repo-root>/src/train/checkpoints/netburst_ibgbi_manifest/NetBurstIBGBI_service_100ms_mawi_netburst_CE_intK_manifest_minlen2"
+      ],
+      "nz_thresh": 1,
+      "bi_thresh": 1,
+      "min_len": 2,
+      "save_pkl": "netburst_ibgbi_manifest_service_100ms_mawi_ceintk_minlen2.pkl",
+      "per_example_csv": "per_example_metrics_netburst_ibgbi_manifest_service_100ms_mawi_ceintk_minlen2.csv",
+      "aggregate_json": "final_metrics_netburst_ibgbi_manifest_service_100ms_mawi_ceintk_minlen2.json"
+    }
+  ]
+}

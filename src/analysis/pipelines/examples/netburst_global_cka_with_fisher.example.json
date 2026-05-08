@@ -1,0 +1,7 @@
+{
+  "_comment": "Same as CKA-only plus clustering labels for global Fisher ratio and merged metrics.",
+  "reps_csv": "<USER_Input>",
+  "tsfresh_csv": "<USER_Input>",
+  "out_dir": "<USER_Input>",
+  "clustering_csv": "<USER_Input>"
+}

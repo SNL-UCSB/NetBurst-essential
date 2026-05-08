@@ -1,0 +1,183 @@
+# Canonical sparse->IBGBI->split jobs for this repository;
+# ibg_output_dir and split_output_dir use NetBurst-essential/outputs/ (inputs unchanged).
+# Driver: python run_sparse_to_ibgbi_splits_manifest.py --manifest sparse_to_ibgbi_splits_manifest.yaml
+jobs:
+  - name: ip_1s_main
+    entity_type: ip
+    sparse_input_dir: <data-root>/sparse_timeseries_1s_ip
+    ibg_output_dir: <repo-root>/outputs/ibgbi_1s_ip
+    split_output_dir: <repo-root>/outputs/splits_1s_ip
+    threshold_mode: value
+    threshold_value: 100
+    bin_ms: 1000
+    min_seq_len: 3
+    max_seq_len: 9000
+    min_bursts: 3
+    train_ratio: 0.7
+    context_ratio: 0.7
+    seed: 42
+    alignment_mode: burst_timestamp
+    ibg_in_ms: false
+    outbound: false
+
+  - name: subnet_1s_main
+    entity_type: subnet
+    sparse_input_dir: <data-root>/sparse_timeseries_1s_subnet
+    ibg_output_dir: <repo-root>/outputs/ibgbi_1s_subnet
+    split_output_dir: <repo-root>/outputs/splits_1s_subnet
+    threshold_mode: value
+    threshold_value: 100
+    bin_ms: 1000
+    min_seq_len: 3
+    max_seq_len: 9000
+    min_bursts: 3
+    train_ratio: 0.7
+    context_ratio: 0.7
+    seed: 42
+    alignment_mode: burst_timestamp
+    ibg_in_ms: false
+    outbound: false
+
+  - name: service_100ms_main
+    entity_type: ip_service
+    sparse_input_dir: <data-root>/sparse_timeseries_100ms_service
+    ibg_output_dir: <repo-root>/outputs/ibgbi_100ms_service
+    split_output_dir: <repo-root>/outputs/splits_100ms_service
+    threshold_mode: value
+    threshold_value: 1
+    bin_ms: 100
+    min_seq_len: 3
+    max_seq_len: 9000
+    min_bursts: 3
+    train_ratio: 0.7
+    context_ratio: 0.7
+    seed: 42
+    alignment_mode: burst_timestamp
+    ibg_in_ms: false
+    outbound: false
+
+  - name: service_100ms_mawi
+    entity_type: ip_service
+    sparse_input_dir: <data-root>/sparse_timeseries_100ms_MAWI_service
+    ibg_output_dir: <repo-root>/outputs/ibgbi_100ms_mawi_service
+    split_output_dir: <repo-root>/outputs/splits_100ms_mawi_service
+    threshold_mode: value
+    threshold_value: 1
+    bin_ms: 100
+    min_seq_len: 3
+    max_seq_len: 9000
+    min_bursts: 3
+    train_ratio: 0.7
+    context_ratio: 0.7
+    seed: 42
+    alignment_mode: burst_timestamp
+    ibg_in_ms: false
+    outbound: false
+
+  - name: ip_1s_mawi
+    entity_type: ip
+    sparse_input_dir: <data-root>/sparse_timeseries_1s_MAWI_ip
+    ibg_output_dir: <repo-root>/outputs/ibgbi_1s_mawi_ip
+    split_output_dir: <repo-root>/outputs/splits_1s_mawi_ip
+    threshold_mode: value
+    threshold_value: 100
+    bin_ms: 1000
+    min_seq_len: 3
+    max_seq_len: 9000
+    min_bursts: 3
+    train_ratio: 0.7
+    context_ratio: 0.7
+    seed: 42
+    alignment_mode: burst_timestamp
+    ibg_in_ms: false
+    outbound: false
+
+  - name: subnet_1s_mawi
+    entity_type: subnet
+    sparse_input_dir: <data-root>/sparse_timeseries_1s_MAWI_subnet
+    ibg_output_dir: <repo-root>/outputs/ibgbi_1s_mawi_subnet
+    split_output_dir: <repo-root>/outputs/splits_1s_mawi_subnet
+    threshold_mode: value
+    threshold_value: 100
+    bin_ms: 1000
+    min_seq_len: 3
+    max_seq_len: 9000
+    min_bursts: 3
+    train_ratio: 0.7
+    context_ratio: 0.7
+    seed: 42
+    alignment_mode: burst_timestamp
+    ibg_in_ms: false
+    outbound: false
+
+  - name: rne_netflow_ip_60s
+    entity_type: ip
+    sparse_input_dir: <data-root>/RnE-NetFlow_Summer_25/preprocess/sparse_ip_out_prepared
+    ibg_output_dir: <repo-root>/outputs/ibgbi_60s_rne_netflow_ip
+    split_output_dir: <repo-root>/outputs/splits_60s_rne_netflow_ip
+    threshold_mode: value
+    threshold_value: 2136000.0
+    bin_ms: 60000
+    min_seq_len: 3
+    max_seq_len: 9000
+    min_bursts: 3
+    train_ratio: 0.7
+    context_ratio: 0.7
+    seed: 42
+    alignment_mode: burst_timestamp
+    ibg_in_ms: false
+    outbound: false
+
+  - name: rne_netflow_service_60s
+    entity_type: ip_service
+    sparse_input_dir: <data-root>/RnE-NetFlow_Summer_25/preprocess/sparse_out_prepared
+    ibg_output_dir: <repo-root>/outputs/ibgbi_60s_rne_netflow_service
+    split_output_dir: <repo-root>/outputs/splits_60s_rne_netflow_service
+    threshold_mode: value
+    threshold_value: 2080000.0
+    bin_ms: 60000
+    min_seq_len: 3
+    max_seq_len: 9000
+    min_bursts: 3
+    train_ratio: 0.7
+    context_ratio: 0.7
+    seed: 42
+    alignment_mode: burst_timestamp
+    ibg_in_ms: false
+    outbound: false
+
+  - name: perfsonar_p99_thresh3
+    pipeline: existing_ibgbi
+    entity_type: ip
+    ibgbi_dir: <data-root>/RnE-NetFlow_Summer_25/preprocess/perfsonar_ibg_bi_p99_thresh3.parquet
+    sparse_dir: <data-root>/RnE-NetFlow_Summer_25/preprocess/perfsonar_timeseries_p99_shards_thresh3
+    split_output_dir: <repo-root>/outputs/splits_perfsonar_p99_thresh3
+    burst_threshold: 3.0
+    min_bursts: 3
+    min_seq_len: 3
+    max_seq_len: 500
+    train_ratio: 0.7
+    context_ratio: 0.7
+    seed: 42
+    alignment_mode: burst_timestamp
+    burst_column: inbound
+    bin_ms: 1000
+    ibg_in_ms: false
+
+  - name: ping_latency_3min_thresh4
+    entity_type: ip
+    sparse_input_dir: <data-root>/ping_latency_sparse_ts_3min_thresh_4ms_label
+    ibg_output_dir: <repo-root>/outputs/ibgbi_ping_latency_3min_thresh4ms
+    split_output_dir: <repo-root>/outputs/splits_ping_latency_3min_thresh4ms
+    threshold_mode: value
+    threshold_value: 4.0
+    min_bursts: 3
+    min_seq_len: 3
+    max_seq_len: 9000
+    train_ratio: 0.7
+    context_ratio: 0.7
+    seed: 42
+    alignment_mode: burst_timestamp
+    bin_ms: 180000
+    ibg_in_ms: false
+    outbound: false

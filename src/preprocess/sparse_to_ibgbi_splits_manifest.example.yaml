@@ -1,0 +1,61 @@
+# Example manifest for run_sparse_to_ibgbi_splits_manifest.py
+#
+# Run:
+#   python src/preprocess/run_sparse_to_ibgbi_splits_manifest.py \
+#     --manifest src/preprocess/sparse_to_ibgbi_splits_manifest.example.yaml
+
+jobs:
+  - name: ip_quantile_50
+    entity_type: ip
+    sparse_input_dir: <data-root>/sparse_timeseries_1s_ip
+    ibg_output_dir: <data-root>/output/ibgbi_1s_ip_q50
+    split_output_dir: <data-root>/output/splits_1s_ip_q50
+    threshold_mode: quantile
+    threshold_quantiles_path: <data-root>/sparse_timeseries_1s_quantiles
+    threshold_quantile: 0.5
+    bin_ms: 1000
+    min_seq_len: 10
+    max_seq_len: 9000
+    min_bursts: 10
+    train_ratio: 0.7
+    context_ratio: 0.7
+    seed: 42
+    alignment_mode: burst_timestamp
+    ibg_in_ms: false
+    outbound: false
+
+  - name: subnet_fixed_threshold
+    entity_type: subnet
+    sparse_input_dir: <data-root>/sparse_timeseries_1s_subnet
+    ibg_output_dir: <data-root>/output/ibgbi_1s_subnet_t300
+    split_output_dir: <data-root>/output/splits_1s_subnet_t300
+    threshold_mode: value
+    threshold_value: 300.0
+    bin_ms: 1000
+    min_seq_len: 10
+    max_seq_len: 9000
+    min_bursts: 10
+    train_ratio: 0.7
+    context_ratio: 0.7
+    seed: 42
+    alignment_mode: burst_timestamp
+    ibg_in_ms: false
+    outbound: false
+
+  - name: service_100ms_fixed_threshold
+    entity_type: ip_service
+    sparse_input_dir: <data-root>/sparse_timeseries_100ms_service
+    ibg_output_dir: <data-root>/output/ibgbi_100ms_service_t100
+    split_output_dir: <data-root>/output/splits_100ms_service_t100
+    threshold_mode: value
+    threshold_value: 100.0
+    bin_ms: 100
+    min_seq_len: 10
+    max_seq_len: 9000
+    min_bursts: 10
+    train_ratio: 0.7
+    context_ratio: 0.7
+    seed: 42
+    alignment_mode: burst_timestamp
+    ibg_in_ms: false
+    outbound: false

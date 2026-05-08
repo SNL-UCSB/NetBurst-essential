@@ -1,0 +1,14 @@
+{
+  "_comment": "Simple normalized CKA x Cohen overlay: set one sweep member first, then expand lists.",
+  "k_values": [
+    500
+  ],
+  "run_values": [
+    1
+  ],
+  "seed_values": [
+    42
+  ],
+  "cluster_members_parent_dir_template": "<USER_Input>",
+  "cohens_d_by_cluster_out_csv_template": "<USER_Input>"
+}

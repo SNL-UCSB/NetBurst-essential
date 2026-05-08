@@ -1,0 +1,47 @@
+{
+  "jobs": [
+    {
+      "name": "ip_1s_main",
+      "parquet_root": "<data-root>/output/splits_1s_ip/ibgbi_train",
+      "models": [
+        "<data-root>/models--amazon--chronos-t5-small/snapshots/476a71b73e6205f7987e811a81f355b9791c9256",
+        "amazon/chronos-t5-base"
+      ],
+      "save_dir": "<repo-root>/src/train/checkpoints/netburst_ibgbi_manifest/NetBurstIBGBI_ip_1s_main_netburst_CE_intK_manifest",
+      "epochs": 100,
+      "batch_size": 16,
+      "max_len": 512,
+      "min_len": 10,
+      "train_frac": 0.8,
+      "num_tokens": 4096,
+      "center_clip": 1000000,
+      "lr": "1e-3",
+      "mse_mode": "centers",
+      "ibg_integer_bins": -1,
+      "loss_weight_bi": 1.0,
+      "loss_weight_ibg": 2.0,
+      "use_ce_loss": true,
+      "freeze_soft_ce_sharpness": true
+    },
+    {
+      "name": "subnet_1s_main",
+      "parquet_root": "<data-root>/output/splits_1s_subnet/ibgbi_train",
+      "models": [
+        "<data-root>/models--amazon--chronos-t5-small/snapshots/476a71b73e6205f7987e811a81f355b9791c9256"
+      ],
+      "save_dir": "<repo-root>/src/train/checkpoints/netburst_ibgbi_manifest/NetBurstIBGBI_subnet_1s_main_netburst_CE_intK_manifest",
+      "max_len": 512,
+      "min_len": 10
+    },
+    {
+      "name": "service_100ms_main",
+      "parquet_root": "<data-root>/output/splits_100ms_service/ibgbi_train",
+      "models": [
+        "<data-root>/models--amazon--chronos-t5-small/snapshots/476a71b73e6205f7987e811a81f355b9791c9256"
+      ],
+      "save_dir": "<repo-root>/src/train/checkpoints/netburst_ibgbi_manifest/NetBurstIBGBI_service_100ms_main_netburst_CE_intK_manifest",
+      "max_len": 128,
+      "min_len": 10
+    }
+  ]
+}

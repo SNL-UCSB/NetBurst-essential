@@ -1,0 +1,63 @@
+{
+  "_comment": "Plots-only rerun: existing cluster dirs, overlay_cka_topN / overlay_z_topN CSVs, members.json. Skips cluster_analysis, global_filtered_overlay_prep, rank JSON. Uses dual CKA + z-order variants; legend metric,tsfresh feature_name (same numbers as global_filtered_local_overlay_rankings.csv per feature). Job 50548994 left many *_zorder.png missing because parallel tasks ran all _ckaorder first; plot order is now interleaved per member.",
+  "sweep_job_name": "clust_then_inv_plots_only_k500_seed42_netburst_20260325",
+  "submission_style": "multi_node_per_run_parallel_k",
+  "runner": "slurm",
+  "environment": "nersc",
+  "clustering_phase": {
+    "enabled": false
+  },
+  "k_values": [
+    500
+  ],
+  "run_values": [
+    1
+  ],
+  "seed_values": [
+    42
+  ],
+  "job_name_template": "<USER_Input>",
+  "clustering_labels_template": "<USER_Input>",
+  "tsfresh_csv": "<USER_Input>",
+  "out_csv_template": "<USER_Input>",
+  "cluster_variance_out_csv_template": "<USER_Input>",
+  "cluster_feature_rank_out_csv_template": "<USER_Input>",
+  "write_cluster_member_samples": false,
+  "cluster_members_parent_dir_template": "<USER_Input>",
+  "member_sample_n": 5,
+  "member_sample_seed": 42,
+  "write_per_cluster_cohens_d_cka": false,
+  "member_timeseries_plots_only": true,
+  "global_filter_overlay_plots": false,
+  "plot_member_dual_global_filter_overlays": true,
+  "plot_member_compact_metric_tsfresh_legend": true,
+  "global_cka_top_csv": "<USER_Input>",
+  "overlay_local_top_k": 10,
+  "label_col": "label",
+  "global_cka_feature_col": "tsfresh_feature",
+  "run_member_timeseries_plots": true,
+  "plot_member_timeseries_input_parquet": "<USER_Input>",
+  "plot_member_timeseries_y_fixed_max": 750000,
+  "input_staging": {
+    "enabled": false,
+    "shm_root": "<USER_Input>",
+    "stage_dir_prefix": "<USER_Input>",
+    "debug_echo": false
+  },
+  "workdir": "<USER_Input>",
+  "multi_node_log_dir": "<USER_Input>",
+  "min_cluster_size": 10,
+  "id_ip": "ip",
+  "id_source_file": "source_file",
+  "ip_suffix_filter": "<USER_Input>",
+  "modules": [
+    "conda",
+    "pytorch/2.6.0"
+  ],
+  "sbatch_multi_node": {
+    "queue": "premium",
+    "account": "<SLURM_ACCOUNT>",
+    "time": "12:00:00",
+    "cpus_per_task": 256
+  }
+}

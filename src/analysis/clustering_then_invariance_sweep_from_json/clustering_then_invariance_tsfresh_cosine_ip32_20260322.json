@@ -1,0 +1,76 @@
+{
+  "_comment": "Cluster invariance on existing TSFresh KMeans labels (cluster_tsfresh_cosine_ip32). clustering_phase disabled — labels are not recomputed. Prerequisite: run_cka_embedding_tsfresh_as_repr_dim_ip32_20260322.json (after tsfresh_columns_as_repr_dim_csv.py) for repr-aligned TSFresh tables. Single run/seed; outputs under run_{run}/K_{k}/seed_{seed}/. After sweep: python summarize_best_run_per_k_mean_fisher.py <output_root>.",
+  "sweep_job_name": "clust_then_inv_tsfresh_cosine_ip32_20260322",
+  "submission_style": "multi_node_per_run_parallel_k",
+  "runner": "slurm",
+  "environment": "nersc",
+  "clustering_phase": {
+    "enabled": false
+  },
+  "k_values": [
+    10,
+    100,
+    500,
+    1000
+  ],
+  "run_values": [
+    1
+  ],
+  "seed_values": [
+    42
+  ],
+  "job_name_template": "<USER_Input>",
+  "clustering_labels_template": "<USER_Input>",
+  "tsfresh_csv": "<USER_Input>",
+  "write_per_cluster_cohens_d_cka": true,
+  "global_filter_overlay_plots": true,
+  "cohens_d_tanh_d0": "median",
+  "global_filter_mode": "fisher_min",
+  "global_fisher_min": 0.1,
+  "global_cka_all_csv": "<USER_Input>",
+  "global_cka_all_feature_col": "tsfresh_feature",
+  "global_cka_all_value_col": "<USER_Input>",
+  "repr_prefix": "value__",
+  "global_all_features_csv": "<USER_Input>",
+  "global_metrics_csv": "<USER_Input>",
+  "global_fisher_cdf_png": "<USER_Input>",
+  "global_cka_cdf_png": "<USER_Input>",
+  "cluster_importance_csv": "<USER_Input>",
+  "cluster_importance_cdf_png": "cluster_importance_cdf.png",
+  "local_importance_all_filename": "local_feature_importance_all_global_filtered.csv",
+  "local_importance_top_filename": "top10_local_feature_importance_global_filtered.csv",
+  "overlay_local_top_k": 10,
+  "run_member_timeseries_plots": true,
+  "out_csv_template": "<USER_Input>",
+  "cluster_variance_out_csv_template": "<USER_Input>",
+  "cluster_feature_rank_out_csv_template": "<USER_Input>",
+  "cohens_d_by_cluster_out_csv_template": "<USER_Input>",
+  "write_cluster_member_samples": true,
+  "cluster_members_parent_dir_template": "<USER_Input>",
+  "member_sample_n": 5,
+  "member_sample_seed": 42,
+  "plot_member_timeseries_input_parquet": "<USER_Input>",
+  "plot_member_timeseries_y_fixed_max": 750000,
+  "input_staging": {
+    "enabled": true,
+    "shm_root": "<USER_Input>",
+    "stage_dir_prefix": "<USER_Input>",
+    "debug_echo": false
+  },
+  "workdir": "<USER_Input>",
+  "multi_node_log_dir": "<USER_Input>",
+  "min_cluster_size": 10,
+  "id_ip": "ip",
+  "id_source_file": "source_file",
+  "ip_suffix_filter": "<USER_Input>",
+  "modules": [
+    "conda",
+    "pytorch/2.6.0"
+  ],
+  "sbatch_multi_node": {
+    "queue": "premium",
+    "account": "<SLURM_ACCOUNT>",
+    "time": "24:00:00",
+    "cpus_per_task": 256
+  }
+}

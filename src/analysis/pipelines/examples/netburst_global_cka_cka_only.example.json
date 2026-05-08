@@ -1,0 +1,6 @@
+{
+  "_comment": "Global CKA only: clustering_csv omitted so merged defaults leave Fisher disabled.",
+  "reps_csv": "<USER_Input>",
+  "tsfresh_csv": "<USER_Input>",
+  "out_dir": "<USER_Input>"
+}

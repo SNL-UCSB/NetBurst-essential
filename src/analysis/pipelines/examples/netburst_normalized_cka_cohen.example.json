@@ -1,0 +1,15 @@
+{
+  "_comment": "Post hoc step after cluster-features with per-cluster CKA + Cohen outputs: cluster_members_parent_dir_template should be the directory containing cluster_*/selected_features_cka.csv; cohens_d template → cohens_d_across_clusters.csv.",
+  "k_values": [
+    500
+  ],
+  "run_values": [
+    1
+  ],
+  "seed_values": [
+    42
+  ],
+  "cluster_members_parent_dir_template": "<USER_Input>",
+  "cohens_d_by_cluster_out_csv_template": "<USER_Input>",
+  "top_k": 10
+}

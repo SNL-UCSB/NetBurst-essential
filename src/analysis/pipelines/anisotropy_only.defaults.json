@@ -1,0 +1,18 @@
+{
+  "_comment": "All tunables visible for anisotropy_scores.run_from_config_dict (paths are placeholders).",
+  "reps_csv": "<USER_Input>",
+  "out": "<USER_Input>",
+  "group_by_source": false,
+  "id_cols": [
+    "ip",
+    "source_file"
+  ],
+  "repr_prefix": "repr_dim",
+  "filter_ip_suffix": null,
+  "demo": false,
+  "align_pc1_to_tsfresh": false,
+  "tsfresh_csv": null,
+  "ts_cols": [],
+  "top_k": 10,
+  "min_corr": null
+}

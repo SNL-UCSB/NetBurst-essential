@@ -1,0 +1,5 @@
+{
+  "_comment": "Simple anisotropy overlay: required inputs only (non-demo mode).",
+  "reps_csv": "<USER_Input>",
+  "out": "<USER_Input>"
+}
