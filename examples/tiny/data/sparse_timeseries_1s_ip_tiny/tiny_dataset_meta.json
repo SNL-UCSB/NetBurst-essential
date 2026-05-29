@@ -1,0 +1,11 @@
+{
+  "source_input_dir": "sanitized_fixture",
+  "source_input_glob": "sanitized_fixture/task_*",
+  "requested_num_samples": 1000,
+  "written_num_samples": 1000,
+  "source_total_rows": 1000,
+  "tiny_task_dir": "examples/tiny/data/sparse_timeseries_1s_ip_tiny/task_0",
+  "sanitized": true,
+  "sanitization_method": "deterministic_hash_pseudonyms",
+  "sanitization_salt_tag": "d05a568db5f9"
+}

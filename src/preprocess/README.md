@@ -29,6 +29,7 @@ Optional for Slurm wrappers:
 - `create_train_test_splits.py` — IBG/BI -> splits (`splits_meta`, `ibgbi_train`, `ibgbi_test`, optional sparse mirrors).
 - `select_bi_threshold.py` — threshold selection from quantiles parquet.
 - `quantiles_utils.py` — helper functions for quantile computation/storage.
+- `ConvertSparseParquetToTSFresh.py` — sparse parquet (`ip`, `source_file`, `inbound`) -> real TSFresh feature CSV.
 
 ### Sparse generation
 

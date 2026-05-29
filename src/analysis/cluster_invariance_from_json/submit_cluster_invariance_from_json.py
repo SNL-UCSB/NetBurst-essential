@@ -566,8 +566,7 @@ def _build_slurm_script(
     member_extra = ""
     if write_cluster_member_samples and cluster_members_parent_dir:
         member_extra = (
-            " \\"
-            + f"\n  --write-cluster-member-samples \\"
+            "\n  --write-cluster-member-samples \\"
             + f"\n  --cluster-members-parent-dir {_bash_quote(str(Path(cluster_members_parent_dir).expanduser()))} \\"
             + f"\n  --member-sample-n {int(member_sample_n)} \\"
             + f"\n  --member-sample-seed {int(member_sample_seed)}"

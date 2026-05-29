@@ -1,0 +1,18 @@
+{
+  "jobs": [
+    {
+      "name": "ip_1s_main_baseline",
+      "parquet_root": "<data-root>/output/splits_1s_ip/ibgbi_train",
+      "models": ["<data-root>/models--amazon--chronos-t5-small/snapshots/476a71b73e6205f7987e811a81f355b9791c9256"],
+      "save_dir": "<repo-root>/src/train/checkpoints/NetBurstIBGBI_ip_1s_main",
+      "num_local_bins": 0
+    },
+    {
+      "name": "ip_1s_main_local16",
+      "parquet_root": "<data-root>/output/splits_1s_ip/ibgbi_train",
+      "models": ["<data-root>/models--amazon--chronos-t5-small/snapshots/476a71b73e6205f7987e811a81f355b9791c9256"],
+      "save_dir": "<repo-root>/src/train/checkpoints/NetBurstIBGBI_ip_1s_main_local16",
+      "num_local_bins": 16
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+jobs:
+  - name: ip_1s_tiny_smoke
+    entity_type: ip
+    sparse_input_dir: examples/tiny/data/sparse_timeseries_1s_ip_tiny
+    ibg_output_dir: examples/tiny/outputs/ibgbi_1s_ip_tiny
+    split_output_dir: examples/tiny/outputs/splits_1s_ip_tiny
+    threshold_mode: value
+    threshold_value: 100
+    bin_ms: 1000
+    min_seq_len: 3
+    max_seq_len: 9000
+    min_bursts: 3
+    train_ratio: 0.7
+    context_ratio: 0.7
+    seed: 42
+    alignment_mode: burst_timestamp
+    ibg_in_ms: false
+    outbound: false

@@ -1,0 +1,14 @@
+{
+  "k_values": [
+    4
+  ],
+  "run_values": [
+    1
+  ],
+  "seed_values": [
+    42
+  ],
+  "cluster_members_parent_dir_template": "examples/tiny/outputs/full_pipeline/analysis/interpretability",
+  "cohens_d_by_cluster_out_csv_template": "examples/tiny/outputs/full_pipeline/analysis/interpretability/cohens_d_across_clusters.csv",
+  "top_k": 5
+}

@@ -1,0 +1,33 @@
+# Core numerics / IO
+numpy
+pandas
+pyarrow
+scipy
+pyyaml
+
+# Preprocess
+pyspark
+
+# Optional preprocess (raw PCAP -> parquet converter)
+mpi4py
+
+# Train / forecast / repr
+torch
+chronos-forecasting
+
+# Analysis
+scikit-learn
+tsfresh
+
+# Retrieval
+faiss-cpu
+pymilvus
+
+# Runtime note (Perlmutter / Intel MKL environments):
+# If tsfresh or retrieval stages fail with:
+#   undefined symbol: omp_get_num_procs
+# run those stages with:
+#   LD_PRELOAD=/global/common/software/nersc9/pytorch/2.6.0/lib/libgomp.so.1
+#
+# Non-Python system dependency for raw PCAP conversion:
+#   tshark (Wireshark CLI)

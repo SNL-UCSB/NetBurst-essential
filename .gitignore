@@ -6,6 +6,9 @@ outputs/
 *.npz
 *.faiss
 *.parquet
+!examples/tiny/data/sparse_timeseries_1s_ip_tiny/task_0/
+!examples/tiny/data/sparse_timeseries_1s_ip_tiny/task_0/*.parquet
+!examples/tiny/data/sparse_timeseries_1s_ip_tiny/task_0/_SUCCESS
 final_metrics*.json
 per_example_metrics*.csv
 bi_rank*.pkl

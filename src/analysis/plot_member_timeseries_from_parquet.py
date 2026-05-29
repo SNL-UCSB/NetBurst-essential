@@ -143,6 +143,25 @@ def _ensure_plot_utils() -> None:
         sys.path.insert(0, s)
 
 
+def _resolve_parquet_dataset_source(parquet_path: str) -> str | list[str]:
+    """
+    Return a pyarrow.dataset-compatible source while tolerating mixed directories.
+
+    If the input path is a directory that includes non-parquet artifacts
+    (e.g. PDFs/logs), return an explicit list of only *.parquet files.
+    """
+    p = Path(parquet_path).expanduser()
+    if not p.exists():
+        raise SystemExit(f"Input parquet path does not exist: {parquet_path}")
+    if p.is_file():
+        return str(p)
+
+    parquet_files = sorted(str(fp) for fp in p.rglob("*.parquet") if fp.is_file())
+    if not parquet_files:
+        raise SystemExit(f"No parquet files found under directory: {parquet_path}")
+    return parquet_files
+
+
 def _load_config(path: str | Path) -> dict[str, Any]:
     p = Path(path).expanduser()
     with open(p, encoding="utf-8") as f:
@@ -1296,7 +1315,7 @@ def _pool_init_worker(
     from plot_utils import setup_plot_style
 
     setup_plot_style(width_in=width_in, font_size=font_size, linewidth=line_width)
-    _WORKER_DATASET = ds.dataset(parquet_path, format="parquet")
+    _WORKER_DATASET = ds.dataset(_resolve_parquet_dataset_source(parquet_path), format="parquet")
 
 
 def _pool_worker_task(task: dict[str, Any]) -> dict[str, Any]:
@@ -1412,7 +1431,7 @@ def run(cfg: dict[str, Any]) -> None:
             "output_dir is required when using inline \"members\" (no members.json path)."
         )
 
-    dataset = ds.dataset(parquet_path, format="parquet")
+    dataset = ds.dataset(_resolve_parquet_dataset_source(parquet_path), format="parquet")
     if value_col not in dataset.schema.names:
         raise SystemExit(
             f"Value column {value_col!r} not in dataset. Columns: {dataset.schema.names}"
@@ -1436,7 +1455,7 @@ def run(cfg: dict[str, Any]) -> None:
 
     parent_max: dict[Path, float] = {}
     if share_y_max and y_fixed_max is None:
-        scan = ds.dataset(parquet_path, format="parquet")
+        scan = ds.dataset(_resolve_parquet_dataset_source(parquet_path), format="parquet")
         for _, rec, cluster_dir in members:
             y = _fetch_inbound_for_member(scan, rec, key_cols, value_col)
             if y is None or y.size == 0:

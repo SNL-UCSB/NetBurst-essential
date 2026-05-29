@@ -77,6 +77,7 @@ PRETRAIN_DEFAULTS = {
     "lr": "1e-3",
     "mse_mode": "centers",
     "ibg_integer_bins": -1,
+    "num_local_bins": 0,
     "loss_weight_bi": 1.0,
     "loss_weight_ibg": 2.0,
     "use_ce_loss": True,
@@ -146,6 +147,7 @@ def _render_pretrain_srun(job: dict, model: str, model_idx: int, n_models: int) 
         f'--save_dir "{save_dir}"',
         f'--lr {g("lr")}',
         f'--ibg_integer_bins {int(g("ibg_integer_bins"))}',
+        f'--num_local_bins {int(g("num_local_bins"))}',
     ]
     if bool(g("use_ce_loss")):
         flags.append("--use_ce_loss")

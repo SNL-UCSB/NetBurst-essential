@@ -24,7 +24,7 @@ from netburst.data import (
     load_fires_ibg_bi,
     load_ibg_bi_series,
 )
-from netburst.model import MyChronosPipeline, TwinHeadChronosPredictor
+from netburst.model import MyChronosPipeline, TwinHeadChronosPredictor, soft_ce_rank
 from netburst.utils import fano_factor_tensor
 
 
@@ -138,6 +138,30 @@ def build_train_parser() -> argparse.ArgumentParser:
         help="Multiply IBG CE loss by this weight (use 0 to train only the BI head).",
     )
     parser.add_argument(
+        "--loss_weight_local_bi",
+        type=float,
+        default=0.0,
+        help="Multiply BI local auxiliary soft-CE by this weight (0 disables).",
+    )
+    parser.add_argument(
+        "--loss_weight_local_ibg",
+        type=float,
+        default=0.0,
+        help="Multiply IBG local auxiliary soft-CE by this weight (0 disables).",
+    )
+    parser.add_argument(
+        "--soft_ce_sigma_local",
+        type=float,
+        default=1.5,
+        help="Rank-space Gaussian sigma for local auxiliary soft-CE.",
+    )
+    parser.add_argument(
+        "--local_loss_min_context",
+        type=int,
+        default=16,
+        help="Mask out first N target positions from local auxiliary loss.",
+    )
+    parser.add_argument(
         "--ibg_integer_bins",
         type=int,
         default=0,
@@ -148,6 +172,21 @@ def build_train_parser() -> argparse.ArgumentParser:
             "0 (default): legacy quantile tokenizer (GlobalQuantileBins) on IBG. "
             "Integer-bin modes also keep IBG=0 as a valid observation."
         ),
+    )
+    parser.add_argument(
+        "--num_local_bins",
+        type=int,
+        default=0,
+        help="Per-series local quantile bins (0 = disabled, identical to legacy).",
+    )
+    parser.add_argument(
+        "--soft_ce_alpha_mode",
+        type=str,
+        default="scalar",
+        choices=["scalar", "perbin", "parametric"],
+        help="Soft-CE sharpness: 'scalar' (one alpha/stream, legacy), "
+        "'perbin' (learnable alpha per bin), "
+        "'parametric' (alpha = linear of per-bin width/center features).",
     )
     return parser
 
@@ -167,6 +206,10 @@ def run_training(from_checkpoint: bool) -> None:
     rank       = dist.get_rank()
     torch.cuda.set_device(local_rank)
     device = torch.device(f"cuda:{local_rank}")
+    if rank == 0:
+        print("[run_training] Parsed args:")
+        for key, value in sorted(vars(args).items()):
+            print(f"  {key}={value}")
 
     # 1) Load (bi, ibg) pairs and compute separate quantile boundaries
     if rank == 0:
@@ -369,7 +412,13 @@ def run_training(from_checkpoint: bool) -> None:
             use_ce_loss=args.use_ce_loss,
             loss_weight_bi=args.loss_weight_bi,
             loss_weight_ibg=args.loss_weight_ibg,
+            loss_weight_local_bi=args.loss_weight_local_bi,
+            loss_weight_local_ibg=args.loss_weight_local_ibg,
+            soft_ce_sigma_local=args.soft_ce_sigma_local,
+            local_loss_min_context=args.local_loss_min_context,
             ibg_integer_bins=args.ibg_integer_bins,
+            num_local_bins=args.num_local_bins,
+            soft_ce_alpha_mode=args.soft_ce_alpha_mode,
         ).to(device)
         # load the model state dict from the given path
         # state = torch.load(args.retrain, map_location=device)
@@ -389,6 +438,7 @@ def run_training(from_checkpoint: bool) -> None:
     # 4) training + validation loop
     best_acc = 10000000
     os.makedirs(args.save_dir, exist_ok=True)
+    global_val_ce_baseline = None
 
     for epoch in range(args.epochs):
         # — train —
@@ -396,18 +446,121 @@ def run_training(from_checkpoint: bool) -> None:
         count = 0
         train_sampler.set_epoch(epoch)
         total_loss = 0.0
+        local_sanity_checked = False
+        local_trend_checked = False
+        first_local_bi = None
+        first_local_ibg = None
+        step_idx = 0
         for batch in train_loader:
             # try:
-            logits_bi, logits_ibg, targets_bi, targets_ibg, valid_bi, valid_ibg, ids_bi, ids_ibg = model.module.forward(batch)
-            loss, ce_bi, ce_ibg, l1_bi, l1_ibg = model.module.compute_loss(
+            (
+                logits_bi,
+                logits_ibg,
+                targets_bi,
+                targets_ibg,
+                valid_bi,
+                valid_ibg,
+                ids_bi,
+                ids_ibg,
+                logits_local_bi,
+                logits_local_ibg,
+                local_targets_bi,
+                local_targets_ibg,
+                local_valid_bi,
+                local_valid_ibg,
+            ) = model.module.forward(batch)
+            base_loss, ce_bi, ce_ibg, l1_bi, l1_ibg = model.module.compute_loss(
                 logits_bi, logits_ibg, targets_bi, targets_ibg, valid_bi, valid_ibg
             )
+            loss = base_loss
+            local_bi_loss = torch.zeros((), device=device, dtype=loss.dtype)
+            local_ibg_loss = torch.zeros((), device=device, dtype=loss.dtype)
+
+            aux_w_bi = float(getattr(model.module, "loss_weight_local_bi", 0.0))
+            aux_w_ibg = float(getattr(model.module, "loss_weight_local_ibg", 0.0))
+            aux_sigma = float(getattr(model.module, "soft_ce_sigma_local", 1.5))
+            aux_min_ctx = int(getattr(model.module, "local_loss_min_context", 16))
+            n_tokens = int(getattr(model.module.pipeline.model.config, "n_tokens"))
+            n_special = int(getattr(model.module.pipeline.model.config, "n_special_tokens"))
+
+            if (
+                model.module.num_local_bins > 0
+                and logits_local_bi is not None
+                and local_targets_bi is not None
+                and local_valid_bi is not None
+            ):
+                T_local = local_targets_bi.size(1)
+                min_ctx = max(0, int(aux_min_ctx))
+                pos = torch.arange(T_local, device=device).unsqueeze(0)
+                min_ctx_mask = pos >= min_ctx
+                local_mask_bi = local_valid_bi & min_ctx_mask
+                local_mask_ibg = local_valid_ibg & min_ctx_mask
+
+                if aux_w_bi > 0.0:
+                    local_bi_loss = soft_ce_rank(
+                        logits_local_bi,
+                        local_targets_bi,
+                        n_tokens=n_tokens,
+                        sigma=aux_sigma,
+                        n_special=n_special,
+                        mask=local_mask_bi,
+                    )
+                    loss = loss + aux_w_bi * local_bi_loss
+
+                if aux_w_ibg > 0.0:
+                    local_ibg_loss = soft_ce_rank(
+                        logits_local_ibg,
+                        local_targets_ibg,
+                        n_tokens=n_tokens,
+                        sigma=aux_sigma,
+                        n_special=n_special,
+                        mask=local_mask_ibg,
+                    )
+                    loss = loss + aux_w_ibg * local_ibg_loss
+
+                if rank == 0 and not local_sanity_checked:
+                    if aux_w_bi == 0.0 and aux_w_ibg == 0.0:
+                        delta = (loss.detach() - base_loss.detach()).abs().item()
+                        assert delta <= 1e-6, f"Backward-compat loss mismatch with local weights 0: delta={delta}"
+                    else:
+                        assert logits_local_bi.shape == logits_bi.shape, (
+                            f"local BI logits shape {logits_local_bi.shape} must match global {logits_bi.shape}"
+                        )
+                        assert logits_local_ibg.shape == logits_ibg.shape, (
+                            f"local IBG logits shape {logits_local_ibg.shape} must match global {logits_ibg.shape}"
+                        )
+                        if aux_w_bi > 0.0:
+                            assert torch.isfinite(local_bi_loss), "Local BI loss is non-finite"
+                        if aux_w_ibg > 0.0:
+                            assert torch.isfinite(local_ibg_loss), "Local IBG loss is non-finite"
+                    local_sanity_checked = True
+
+                if rank == 0 and (aux_w_bi > 0.0 or aux_w_ibg > 0.0):
+                    if aux_w_bi > 0.0 and first_local_bi is None:
+                        first_local_bi = float(local_bi_loss.detach().item())
+                    if aux_w_ibg > 0.0 and first_local_ibg is None:
+                        first_local_ibg = float(local_ibg_loss.detach().item())
+                    if (not local_trend_checked) and step_idx >= 500:
+                        if aux_w_bi > 0.0 and first_local_bi is not None:
+                            if float(local_bi_loss.detach().item()) > first_local_bi * 1.05:
+                                print(
+                                    f"[WARN] local BI loss did not decrease by step 500 "
+                                    f"(start={first_local_bi:.4f}, now={float(local_bi_loss.detach().item()):.4f})."
+                                )
+                        if aux_w_ibg > 0.0 and first_local_ibg is not None:
+                            if float(local_ibg_loss.detach().item()) > first_local_ibg * 1.05:
+                                print(
+                                    f"[WARN] local IBG loss did not decrease by step 500 "
+                                    f"(start={first_local_ibg:.4f}, now={float(local_ibg_loss.detach().item()):.4f})."
+                                )
+                        local_trend_checked = True
+
             optimizer.zero_grad()
             loss.backward()
             # Print loss every 100 steps plus Fano factors (input, ground truth, forecast)
             if rank == 0 and count % 100 == 0:
-                alpha_bi_now = float(torch.exp(model.module.log_soft_ce_alpha_bi).detach().item())
-                alpha_ibg_now = float(torch.exp(model.module.log_soft_ce_alpha_ibg).detach().item())
+                alpha_bi_now = float(model.module._soft_ce_alpha("bi").mean().detach().item())
+                alpha_ibg_now = float(model.module._soft_ce_alpha("ibg").mean().detach().item())
                 # Context (input) values: positions 0..T-2
                 ctx_ids_bi = ids_bi[:, :-1]
                 ctx_ids_ibg = ids_ibg[:, :-1]
@@ -432,6 +585,7 @@ def run_training(from_checkpoint: bool) -> None:
                     f"Epoch {epoch+1}/{args.epochs} step {count} — "
                     f"total={loss.item():.4f} | "
                     f"CE(bi)={ce_bi.item():.4f}, CE(ibg)={ce_ibg.item():.4f} | "
+                    f"LocalCE(bi)={local_bi_loss.item():.4f}, LocalCE(ibg)={local_ibg_loss.item():.4f} | "
                     f"L1(bi)={l1_bi.item():.4f}, L1(ibg)={l1_ibg.item():.4f} | "
                     f"alpha(bi)={alpha_bi_now:.3f}, alpha(ibg)={alpha_ibg_now:.3f} | "
                     f"Fano_bi in/gt/fc={fano_in_bi:.4f}/{fano_gt_bi:.4f}/{fano_fc_bi:.4f} | "
@@ -442,6 +596,7 @@ def run_training(from_checkpoint: bool) -> None:
             total_loss += loss.cpu().item()
             del loss
             count += 1
+            step_idx += 1
             # except:
             #     print(f"Skipping batch {count} due to error")
             #     try:
@@ -457,6 +612,13 @@ def run_training(from_checkpoint: bool) -> None:
         total_bi   = torch.tensor(0, dtype=torch.long, device=device)
         correct_ibg = torch.tensor(0, dtype=torch.long, device=device)
         total_ibg   = torch.tensor(0, dtype=torch.long, device=device)
+        correct_local_bi = torch.tensor(0, dtype=torch.long, device=device)
+        total_local_bi = torch.tensor(0, dtype=torch.long, device=device)
+        correct_local_ibg = torch.tensor(0, dtype=torch.long, device=device)
+        total_local_ibg = torch.tensor(0, dtype=torch.long, device=device)
+        val_ce_bi_sum = torch.tensor(0.0, device=device)
+        val_ce_ibg_sum = torch.tensor(0.0, device=device)
+        val_ce_count = torch.tensor(0, dtype=torch.long, device=device)
 
         with torch.no_grad():
             l1_sum_bi  = torch.tensor(0.0, device=device)
@@ -464,13 +626,53 @@ def run_training(from_checkpoint: bool) -> None:
             l1_cnt_bi  = torch.tensor(0, dtype=torch.long, device=device)
             l1_cnt_ibg = torch.tensor(0, dtype=torch.long, device=device)
             for batch in val_loader:
-                logits_bi, logits_ibg, targets_bi, targets_ibg, valid_bi, valid_ibg, _ids_bi, _ids_ibg = model.module.forward(batch)
+                (
+                    logits_bi,
+                    logits_ibg,
+                    targets_bi,
+                    targets_ibg,
+                    valid_bi,
+                    valid_ibg,
+                    _ids_bi,
+                    _ids_ibg,
+                    logits_local_bi,
+                    logits_local_ibg,
+                    local_targets_bi,
+                    local_targets_ibg,
+                    local_valid_bi,
+                    local_valid_ibg,
+                ) = model.module.forward(batch)
                 preds_bi  = logits_bi.argmax(dim=-1)
                 preds_ibg = logits_ibg.argmax(dim=-1)
                 correct_bi += ((preds_bi == targets_bi) & valid_bi).sum()
                 total_bi   += valid_bi.sum()
                 correct_ibg += ((preds_ibg == targets_ibg) & valid_ibg).sum()
                 total_ibg   += valid_ibg.sum()
+                _, ce_bi_val, ce_ibg_val, _l1_bi_val, _l1_ibg_val = model.module.compute_loss(
+                    logits_bi, logits_ibg, targets_bi, targets_ibg, valid_bi, valid_ibg
+                )
+                val_ce_bi_sum += ce_bi_val
+                val_ce_ibg_sum += ce_ibg_val
+                val_ce_count += 1
+
+                if (
+                    model.module.num_local_bins > 0
+                    and logits_local_bi is not None
+                    and local_targets_bi is not None
+                    and local_valid_bi is not None
+                ):
+                    T_local = local_targets_bi.size(1)
+                    min_ctx = max(0, int(getattr(model.module, "local_loss_min_context", 16)))
+                    pos = torch.arange(T_local, device=device).unsqueeze(0)
+                    min_ctx_mask = pos >= min_ctx
+                    eval_mask_bi = local_valid_bi & min_ctx_mask
+                    eval_mask_ibg = local_valid_ibg & min_ctx_mask
+                    pred_local_bi = logits_local_bi.argmax(dim=-1)
+                    pred_local_ibg = logits_local_ibg.argmax(dim=-1)
+                    correct_local_bi += ((pred_local_bi == local_targets_bi) & eval_mask_bi).sum()
+                    total_local_bi += eval_mask_bi.sum()
+                    correct_local_ibg += ((pred_local_ibg == local_targets_ibg) & eval_mask_ibg).sum()
+                    total_local_ibg += eval_mask_ibg.sum()
 
                 # Validation L1 according to selected mode
                 probs_bi  = torch.softmax(logits_bi, dim=-1)
@@ -517,6 +719,13 @@ def run_training(from_checkpoint: bool) -> None:
         dist.all_reduce(total_bi,   op=dist.ReduceOp.SUM)
         dist.all_reduce(correct_ibg, op=dist.ReduceOp.SUM)
         dist.all_reduce(total_ibg,   op=dist.ReduceOp.SUM)
+        dist.all_reduce(correct_local_bi, op=dist.ReduceOp.SUM)
+        dist.all_reduce(total_local_bi, op=dist.ReduceOp.SUM)
+        dist.all_reduce(correct_local_ibg, op=dist.ReduceOp.SUM)
+        dist.all_reduce(total_local_ibg, op=dist.ReduceOp.SUM)
+        dist.all_reduce(val_ce_bi_sum, op=dist.ReduceOp.SUM)
+        dist.all_reduce(val_ce_ibg_sum, op=dist.ReduceOp.SUM)
+        dist.all_reduce(val_ce_count, op=dist.ReduceOp.SUM)
         # also reduce L1 aggregates
         for t in [l1_sum_bi, l1_sum_ibg]:
             dist.all_reduce(t, op=dist.ReduceOp.SUM)
@@ -535,10 +744,50 @@ def run_training(from_checkpoint: bool) -> None:
                 acc = 0.5 * (acc_bi + acc_ibg)
             l1_bi_val  = (l1_sum_bi / l1_cnt_bi.clamp_min(1)).item()
             l1_ibg_val = (l1_sum_ibg / l1_cnt_ibg.clamp_min(1)).item()
+            local_acc_bi = (correct_local_bi.float() / total_local_bi.clamp_min(1).float()).item()
+            local_acc_ibg = (correct_local_ibg.float() / total_local_ibg.clamp_min(1).float()).item()
+            val_ce_bi = (val_ce_bi_sum / val_ce_count.clamp_min(1)).item()
+            val_ce_ibg = (val_ce_ibg_sum / val_ce_count.clamp_min(1)).item()
             print(
                 f"Epoch {epoch+1}/{args.epochs} — val accuracy: bi={acc_bi:.4f}, ibg={acc_ibg:.4f}, avg={acc:.4f} | "
-                f"val L1: bi={l1_bi_val:.4f}, ibg={l1_ibg_val:.4f}"
+                f"val L1: bi={l1_bi_val:.4f}, ibg={l1_ibg_val:.4f} | "
+                f"val CE: bi={val_ce_bi:.4f}, ibg={val_ce_ibg:.4f} | "
+                f"val local acc (post-min-context): bi={local_acc_bi:.4f}, ibg={local_acc_ibg:.4f}"
             )
+
+            w_bi_ce = float(getattr(model.module, "loss_weight_bi", 1.0))
+            w_ibg_ce = float(getattr(model.module, "loss_weight_ibg", 1.0))
+            denom_ce = max(w_bi_ce + w_ibg_ce, 1e-12)
+            global_val_ce = (w_bi_ce * val_ce_bi + w_ibg_ce * val_ce_ibg) / denom_ce
+            if global_val_ce_baseline is None:
+                global_val_ce_baseline = global_val_ce
+            elif (
+                (float(getattr(model.module, "loss_weight_local_bi", 0.0)) > 0.0
+                 or float(getattr(model.module, "loss_weight_local_ibg", 0.0)) > 0.0)
+                and global_val_ce > 1.02 * global_val_ce_baseline
+            ):
+                print(
+                    f"[WARN] Weighted global val CE rose by >2% vs run-start baseline proxy "
+                    f"({global_val_ce:.4f} vs {global_val_ce_baseline:.4f}). "
+                    "Aux local loss may be too strong."
+                )
+
+            if (
+                model.module.num_local_bins > 0
+                and (float(getattr(model.module, "loss_weight_local_bi", 0.0)) > 0.0
+                     or float(getattr(model.module, "loss_weight_local_ibg", 0.0)) > 0.0)
+                and epoch + 1 >= 5
+            ):
+                if total_local_bi.item() > 0 and (local_acc_bi < 0.30 or local_acc_bi > 0.85):
+                    print(
+                        f"[WARN] BI local val top-1={local_acc_bi:.3f} outside expected [0.30, 0.85]. "
+                        "Consider tuning soft_ce_sigma_local or local loss weight."
+                    )
+                if total_local_ibg.item() > 0 and (local_acc_ibg < 0.30 or local_acc_ibg > 0.85):
+                    print(
+                        f"[WARN] IBG local val top-1={local_acc_ibg:.3f} outside expected [0.30, 0.85]. "
+                        "Consider tuning soft_ce_sigma_local or local loss weight."
+                    )
 
             # save best (weighted L1 matches training loss weighting)
             score_val = w_bi * l1_bi_val + w_ibg * l1_ibg_val

@@ -33,6 +33,19 @@ torchrun --nproc_per_node=4 ar_predict.py /path/to/ibgbi_test --model ./checkpoi
 python extract_repr.py twin_ip /path/to/bi_ibg_parquet --model ./checkpoints/run1 --output_csv ./repr/ip_reps.csv
 ```
 
+## Slurm (NERSC)
+
+See [`slurm_files/README.md`](slurm_files/README.md). Typical pretrain with local bins:
+
+```bash
+cd src/train/slurm_files
+export SLURM_ACCOUNT=<SLURM_ACCOUNT> REPO_ROOT=/path/to/NetBurst-essential
+export PARQUET_ROOT=/path/to/ibgbi_train MODEL_PATH=/path/to/chronos-t5-small/snapshot
+./submit_pretrain.sh local16
+```
+
+Use `./submit_pretrain.sh baseline` for `num_local_bins=0` (same as legacy). Finetune: `export CKPT_DIR=./checkpoints/run1 && ./submit_pretrain.sh finetune`.
+
 ## What to expect
 
 - Checkpoint directories under your configured save path

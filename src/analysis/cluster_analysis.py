@@ -735,18 +735,19 @@ def main():
     merged = clus_small.merge(ts_num, on=id_cols, how="inner", suffixes=("_repr", ""))
 
     repr_cols_merged: List[str] = []
-    for c in repr_cols:
-        if c in repr_feature_overlap and f"{c}_repr" in merged.columns:
-            repr_cols_merged.append(f"{c}_repr")
-        else:
-            repr_cols_merged.append(c)
+    if args.write_per_cluster_cohens_d_cka:
+        for c in repr_cols:
+            if c in repr_feature_overlap and f"{c}_repr" in merged.columns:
+                repr_cols_merged.append(f"{c}_repr")
+            else:
+                repr_cols_merged.append(c)
 
-    missing_repr = [c for c in repr_cols_merged if c not in merged.columns]
-    if missing_repr:
-        raise KeyError(
-            "Missing representation columns in merged dataframe after join: "
-            f"{missing_repr[:10]}"
-        )
+        missing_repr = [c for c in repr_cols_merged if c not in merged.columns]
+        if missing_repr:
+            raise KeyError(
+                "Missing representation columns in merged dataframe after join: "
+                f"{missing_repr[:10]}"
+            )
 
     if merged.shape[0] == 0:
         raise ValueError(

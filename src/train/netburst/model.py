@@ -13,6 +13,71 @@ import torch
 import torch.nn as nn
 from chronos import ChronosConfig, ChronosModel, ChronosPipeline, ChronosTokenizer
 
+
+def soft_ce_rank(
+    logits: torch.Tensor,
+    target_ids: torch.Tensor,
+    n_tokens: int,
+    sigma: float,
+    n_special: int,
+    mask: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    """
+    Soft cross-entropy with Gaussian-over-rank targets.
+
+    logits:     [B, T, V]
+    target_ids: [B, T] (token ids, including special-token offset)
+    mask:       [B, T] bool (optional). False positions are excluded.
+    """
+    if logits.ndim != 3 or target_ids.ndim != 2:
+        raise ValueError(
+            f"soft_ce_rank expects logits[B,T,V] and targets[B,T], got {logits.shape} and {target_ids.shape}"
+        )
+    if sigma <= 0:
+        raise ValueError(f"sigma must be > 0, got {sigma}")
+
+    B, T, V = logits.shape
+    if target_ids.shape[0] != B or target_ids.shape[1] != T:
+        raise ValueError(
+            f"target_ids shape {target_ids.shape} must match logits[:2] {(B, T)}"
+        )
+
+    device = logits.device
+    dtype = logits.dtype
+    target_ids = target_ids.to(device=device)
+    if mask is None:
+        mask = torch.ones_like(target_ids, dtype=torch.bool, device=device)
+    else:
+        mask = mask.to(device=device, dtype=torch.bool)
+
+    valid_targets = (
+        (target_ids >= int(n_special))
+        & (target_ids < int(n_tokens))
+    )
+    valid = mask & valid_targets
+    valid_count = valid.sum()
+    if valid_count.item() == 0:
+        # Preserve graph/device semantics.
+        return logits.sum() * 0.0
+
+    vocab_ids = torch.arange(V, device=device, dtype=dtype).view(1, 1, V)
+    target_rank = target_ids.to(dtype=dtype).unsqueeze(-1)  # [B, T, 1]
+    inv_two_sigma2 = 1.0 / (2.0 * float(sigma) * float(sigma))
+    dist2 = (vocab_ids - target_rank) ** 2
+    target_dist = torch.exp(-dist2 * inv_two_sigma2)  # [B, T, V]
+
+    real_vocab = (
+        (vocab_ids >= float(n_special))
+        & (vocab_ids < float(n_tokens))
+    ).to(dtype=dtype)
+    target_dist = target_dist * real_vocab
+    target_dist = target_dist / target_dist.sum(dim=-1, keepdim=True).clamp_min(1e-12)
+
+    log_probs = torch.log_softmax(logits, dim=-1)
+    per_pos = -(target_dist * log_probs).sum(dim=-1)  # [B, T]
+    per_pos = per_pos * valid.to(dtype=dtype)
+    return per_pos.sum() / valid_count.to(dtype=dtype).clamp_min(1.0)
+
 class MyChronosPipeline(ChronosPipeline):
     @classmethod
     def from_pretrained(cls, *args, **kwargs):
@@ -104,6 +169,88 @@ class GlobalQuantileBins(ChronosTokenizer):
 # --- end tokenizer ---
 
 
+class LocalQuantileBins(ChronosTokenizer):
+    """Per-series empirical quantile binning (input-only residual stream)."""
+
+    def __init__(
+        self,
+        num_local_bins: int,
+        config: ChronosConfig,
+        min_valid: float = 1e-12,
+    ):
+        self.config = config
+        max_real = int(getattr(config, "n_tokens")) - int(getattr(config, "n_special_tokens"))
+        self.num_local_bins = int(max(0, min(int(num_local_bins), max_real)))
+        self.min_valid = float(min_valid)
+
+    def _valid_mask(self, x: torch.Tensor) -> torch.Tensor:
+        return ~torch.isnan(x) & (x >= self.min_valid)
+
+    def _compute_edges(self, context: torch.Tensor, attention_mask: torch.Tensor) -> Optional[torch.Tensor]:
+        K = self.num_local_bins
+        if K <= 0:
+            return None
+        q_levels = torch.arange(1, K, device=context.device, dtype=torch.float32) / K
+        ctx_nan = context.masked_fill(~attention_mask, float("nan"))
+        edges = torch.nanquantile(ctx_nan, q_levels, dim=1)  # [K-1, B]
+        edges = edges.transpose(0, 1).contiguous()  # [B, K-1]
+        edges = torch.nan_to_num(edges, nan=0.0)
+        edges, _ = torch.sort(edges, dim=1)
+        return edges
+
+    def _tokenize_with_edges(
+        self,
+        values: torch.Tensor,
+        attention_mask: torch.Tensor,
+        edges: Optional[torch.Tensor],
+    ) -> torch.Tensor:
+        K = self.num_local_bins
+        if K <= 0 or edges is None:
+            token_ids = torch.full(
+                values.shape, self.config.pad_token_id, dtype=torch.long, device=values.device
+            )
+            token_ids[attention_mask] = self.config.n_special_tokens
+            return token_ids
+
+        token_ids = torch.searchsorted(edges, values, right=False)
+        token_ids = token_ids + self.config.n_special_tokens
+        token_ids.clamp_(0, self.config.n_tokens - 1)
+        token_ids[~attention_mask] = self.config.pad_token_id
+        return token_ids
+
+    def context_input_transform(self, context: torch.Tensor, return_edges: bool = False):
+        context = context.to(dtype=torch.float32)
+        attention_mask = self._valid_mask(context)
+        edges = self._compute_edges(context, attention_mask)
+        token_ids = self._tokenize_with_edges(context, attention_mask, edges)
+
+        if self.config.use_eos_token and self.config.model_type == "seq2seq":
+            eos = torch.full((context.shape[0], 1), self.config.eos_token_id)
+            mask_eos = torch.ones_like(eos, dtype=torch.bool)
+            token_ids = torch.cat([token_ids, eos], dim=1)
+            attention_mask = torch.cat([attention_mask, mask_eos], dim=1)
+        if return_edges:
+            return token_ids, attention_mask, 1, edges
+        return token_ids, attention_mask, 1
+
+    def label_input_transform(
+        self,
+        label: torch.Tensor,
+        edges: Optional[torch.Tensor],
+        append_eos: bool = False,
+    ):
+        label = label.to(dtype=torch.float32)
+        attention_mask = self._valid_mask(label)
+        token_ids = self._tokenize_with_edges(label, attention_mask, edges)
+        if append_eos and self.config.use_eos_token and self.config.model_type == "seq2seq":
+            eos = torch.full((label.shape[0], 1), self.config.eos_token_id)
+            mask_eos = torch.ones_like(eos, dtype=torch.bool)
+            token_ids = torch.cat([token_ids, eos], dim=1)
+            attention_mask = torch.cat([attention_mask, mask_eos], dim=1)
+        return token_ids, attention_mask
+# --- end LocalQuantileBins ---
+
+
 class IntegerIBGBins(ChronosTokenizer):
     """Tokenize IBG (inter-burst-gap) as non-negative integer indices.
 
@@ -168,10 +315,16 @@ class IntegerIBGBins(ChronosTokenizer):
 
 class MyChronosModel(ChronosModel):
 
-    def __init__(self, config: ChronosConfig, model: Optional[torch.nn.Module] = None):
+    def __init__(
+        self,
+        config: ChronosConfig,
+        model: Optional[torch.nn.Module] = None,
+        num_local_bins: int = 0,
+    ):
         super().__init__(config, model)
         if "d_model" not in config.__dict__:
             config.d_model = 512  # default value
+        self.num_local_bins = int(num_local_bins)
         self.embedding2 = nn.Embedding(config.n_tokens, config.d_model)
         # Warm-start the IBG (stream-2) embedding table from the pretrained BI/T5
         # token embeddings so both streams start from the same well-conditioned prior,
@@ -204,6 +357,30 @@ class MyChronosModel(ChronosModel):
         self.drop2 = nn.Dropout(0.1)
         self.skip = nn.Linear(2*config.d_model, config.d_model, bias=False)
 
+        if self.num_local_bins > 0:
+            self.embedding1_local = nn.Embedding(config.n_tokens, config.d_model)
+            self.embedding2_local = nn.Embedding(config.n_tokens, config.d_model)
+            nn.init.zeros_(self.embedding1_local.weight)
+            nn.init.zeros_(self.embedding2_local.weight)
+            self.lm_head_local_bi = nn.Linear(config.d_model, config.n_tokens, bias=False)
+            self.lm_head_local_ibg = nn.Linear(config.d_model, config.n_tokens, bias=False)
+            self._tie_local_head_weights()
+
+    def _tie_local_head_weights(self) -> None:
+        if hasattr(self, "lm_head_local_bi") and hasattr(self, "embedding1_local"):
+            self.lm_head_local_bi.weight = self.embedding1_local.weight
+        if hasattr(self, "lm_head_local_ibg") and hasattr(self, "embedding2_local"):
+            self.lm_head_local_ibg.weight = self.embedding2_local.weight
+
+    def heads(self, decoder_hidden: torch.Tensor) -> dict:
+        out = {
+            "logits_global_bi": self.model.lm_head(decoder_hidden),
+        }
+        if self.num_local_bins > 0 and hasattr(self, "lm_head_local_bi"):
+            out["logits_local_bi"] = self.lm_head_local_bi(decoder_hidden)
+            out["logits_local_ibg"] = self.lm_head_local_ibg(decoder_hidden)
+        return out
+
     @classmethod
     def from_pretrained(cls, *args, boundaries=None, **kwargs):
         pipe = super().from_pretrained(*args, **kwargs)
@@ -221,6 +398,8 @@ class MyChronosModel(ChronosModel):
         decoder_input_ids: torch.Tensor,
         type_id: Optional[int] = None,
         cross_attend: bool = False,
+        local_ids1: Optional[torch.Tensor] = None,
+        local_ids2: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         device = self.model.device
         input_ids1 = input_ids1.to(device)
@@ -229,26 +408,34 @@ class MyChronosModel(ChronosModel):
 
         B, T = input_ids1.size()
 
+        if self.num_local_bins > 0 and not isinstance(decoder_input_ids, tuple):
+            if local_ids1 is None or local_ids2 is None:
+                raise ValueError(
+                    "num_local_bins > 0 requires local_ids1 and local_ids2 on teacher-forcing "
+                    "paths (decoder_input_ids not a tuple). AR tuple decoding intentionally "
+                    "omits local ids."
+                )
+
         # ----- Token embedding fusion for both streams -----
-        def tok_emb_layer(input_ids1, input_ids2):
-            emb1 = self.model.get_input_embeddings()(input_ids1).to(device)
-            emb2 = self.embedding2(input_ids2).to(device)
-            emb = torch.cat([emb1, emb2], dim=-1)
-            x = self.pre(emb)
-            x2 = self.fc1(x)
-            x2 = self.act(x2)
-            x2 = self.drop1(x2)
-            x2 = self.fc2(x2)
-            x2 = self.drop2(x2)
-            skip = self.skip(emb)
-            return x2 + skip
+        def tok_emb_layer(
+            ids1,
+            ids2,
+            loc_ids1=None,
+            loc_ids2=None,
+        ):
+            return self.fused_stream_embeddings(
+                ids1,
+                ids2,
+                local_ids1=loc_ids1,
+                local_ids2=loc_ids2,
+            )
 
         # ----- Optional encoder (for cross-attention) -----
         # By default, we DISABLE cross-attention (decoder-only) to avoid future-token leakage
         # when source and target are the same (next-token prediction). Set cross_attend=True
         # if you explicitly want to use encoder cross-attention.
         if cross_attend:
-            tok_emb = tok_emb_layer(input_ids1, input_ids2)  # [B,T,D]
+            tok_emb = tok_emb_layer(input_ids1, input_ids2, local_ids1, local_ids2)  # [B,T,D]
             enc_out = self.model.encoder(
                 inputs_embeds=tok_emb,
                 attention_mask=attention_mask,
@@ -267,7 +454,8 @@ class MyChronosModel(ChronosModel):
             dec_input_ids1, dec_input_ids2 = decoder_input_ids
             dec_input_ids1 = dec_input_ids1.to(device)
             dec_input_ids2 = dec_input_ids2.to(device)
-            dec_in = tok_emb_layer(dec_input_ids1, dec_input_ids2)  # [B, T_dec, D]
+            # AR tuple path: local residual not applied in decoder (per spec).
+            dec_in = tok_emb_layer(dec_input_ids1, dec_input_ids2, None, None)  # [B, T_dec, D]
             # Decoder padding mask (float32): assume all valid in AR tuple path
             dec_pad = torch.ones((B, dec_in.size(1)), device=device, dtype=torch.float32)
         else:
@@ -280,7 +468,19 @@ class MyChronosModel(ChronosModel):
                 torch.full((B, 1), self.model.config.pad_token_id, dtype=torch.long, device=device),
                 input_ids2[:, :-1]
             ], dim=1)
-            dec_in = tok_emb_layer(dec_input_ids1, dec_input_ids2)
+            dec_local_ids1 = dec_local_ids2 = None
+            if local_ids1 is not None:
+                dec_local_ids1 = torch.cat([
+                    torch.full((B, 1), self.model.config.pad_token_id, dtype=torch.long, device=device),
+                    local_ids1[:, :-1].to(device),
+                ], dim=1)
+                dec_local_ids2 = torch.cat([
+                    torch.full((B, 1), self.model.config.pad_token_id, dtype=torch.long, device=device),
+                    local_ids2[:, :-1].to(device),
+                ], dim=1)
+            dec_in = tok_emb_layer(
+                dec_input_ids1, dec_input_ids2, dec_local_ids1, dec_local_ids2
+            )
             # Decoder padding mask (float32): leading token is valid; rest from encoder mask shifted
             dec_pad = torch.cat([
                 torch.ones((B, 1), device=device, dtype=torch.float32),
@@ -320,6 +520,30 @@ class MyChronosModel(ChronosModel):
         logits = self.model.lm_head(dec_h)  # [B, T, V]
 
         return logits.unsqueeze(1), dec_h.unsqueeze(1)
+
+    def fused_stream_embeddings(
+        self,
+        input_ids1: torch.Tensor,
+        input_ids2: torch.Tensor,
+        local_ids1: Optional[torch.Tensor] = None,
+        local_ids2: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        """Build fused BI/IBG token embeddings before encoder/decoder blocks."""
+        device = self.model.device
+        emb1 = self.model.get_input_embeddings()(input_ids1.to(device))
+        emb2 = self.embedding2(input_ids2.to(device))
+        if local_ids1 is not None and hasattr(self, "embedding1_local"):
+            emb1 = emb1 + self.embedding1_local(local_ids1.to(device))
+            emb2 = emb2 + self.embedding2_local(local_ids2.to(device))
+        emb = torch.cat([emb1, emb2], dim=-1)
+        x = self.pre(emb)
+        x2 = self.fc1(x)
+        x2 = self.act(x2)
+        x2 = self.drop1(x2)
+        x2 = self.fc2(x2)
+        x2 = self.drop2(x2)
+        skip = self.skip(emb)
+        return x2 + skip
 
 class ChronosBinPredictor(nn.Module):
     """
@@ -468,7 +692,13 @@ class TwinHeadChronosPredictor(nn.Module):
         use_ce_loss: bool = False,
         loss_weight_bi: float = 1.0,
         loss_weight_ibg: float = 1.0,
+        loss_weight_local_bi: float = 0.0,
+        loss_weight_local_ibg: float = 0.0,
+        soft_ce_sigma_local: float = 1.5,
+        local_loss_min_context: int = 16,
         ibg_integer_bins: int = 0,
+        num_local_bins: int = 0,
+        soft_ce_alpha_mode: str = "scalar",
     ):
         super().__init__()
 
@@ -484,11 +714,22 @@ class TwinHeadChronosPredictor(nn.Module):
         self.soft_ce_denom_floor_ibg = float(max(soft_ce_denom_floor_ibg, 1e-12))
         self.auto_tune_soft_ce_sharpness = bool(auto_tune_soft_ce_sharpness)
         self.use_ce_loss = bool(use_ce_loss)
+        self.soft_ce_alpha_mode = str(soft_ce_alpha_mode).lower()
+        if self.soft_ce_alpha_mode not in ("scalar", "perbin", "parametric"):
+            raise ValueError(
+                "soft_ce_alpha_mode must be one of scalar|perbin|parametric, "
+                f"got {soft_ce_alpha_mode!r}"
+            )
         self.loss_weight_bi = float(loss_weight_bi)
         self.loss_weight_ibg = float(loss_weight_ibg)
+        self.loss_weight_local_bi = float(loss_weight_local_bi)
+        self.loss_weight_local_ibg = float(loss_weight_local_ibg)
+        self.soft_ce_sigma_local = float(soft_ce_sigma_local)
+        self.local_loss_min_context = int(local_loss_min_context)
         # If > 0, use IntegerIBGBins with K = ibg_integer_bins (integer tokenizer for IBG).
         # If 0 (default), use the original GlobalQuantileBins on IBG (backward-compat).
         self.ibg_integer_bins = int(ibg_integer_bins)
+        self.num_local_bins = int(num_local_bins)
         # Whether to enable encoder cross-attention in the inner model
         self.use_cross_attn = bool(use_cross_attn)
 
@@ -517,11 +758,31 @@ class TwinHeadChronosPredictor(nn.Module):
         else:
             self.tokenizer_ibg = GlobalQuantileBins(boundaries_ibg, cfg)
 
+        if self.num_local_bins > 0:
+            self.local_binner_bi = LocalQuantileBins(self.num_local_bins, cfg, min_valid=1e-12)
+            ibg_min_valid = 0.0 if (self.ibg_integer_bins and self.ibg_integer_bins > 0) else 1e-12
+            self.local_binner_ibg = LocalQuantileBins(
+                self.num_local_bins, cfg, min_valid=ibg_min_valid
+            )
+        else:
+            self.local_binner_bi = None
+            self.local_binner_ibg = None
+
         orig_model = self.pipeline.model.to(device)
-        if isinstance(orig_model, MyChronosModel):
+        backbone = getattr(orig_model, "model", None)
+        if self.num_local_bins > 0:
+            new_model = MyChronosModel(
+                orig_model.config, model=backbone, num_local_bins=self.num_local_bins
+            )
+            new_model.load_state_dict(orig_model.state_dict(), strict=False)
+            new_model._tie_local_head_weights()
+            new_model.to(device)
+            self.pipeline.model = new_model
+            self.model = new_model
+        elif isinstance(orig_model, MyChronosModel):
             self.model = orig_model
         else:
-            new_model = MyChronosModel(orig_model.config)
+            new_model = MyChronosModel(orig_model.config, model=backbone)
             new_model.load_state_dict(orig_model.state_dict(), strict=True)
             new_model.to(device)
             self.pipeline.model = new_model
@@ -559,15 +820,71 @@ class TwinHeadChronosPredictor(nn.Module):
         self.register_buffer("token_values_ibg", vals_ibg)
 
         init_log_alpha = math.log(max(float(soft_ce_alpha_init), 1e-6))
-        self.log_soft_ce_alpha_bi = nn.Parameter(
-            torch.tensor(init_log_alpha, dtype=torch.float32, device=self.device),
-            requires_grad=self.auto_tune_soft_ce_sharpness,
-        )
-        self.log_soft_ce_alpha_ibg = nn.Parameter(
-            torch.tensor(init_log_alpha, dtype=torch.float32, device=self.device),
-            requires_grad=self.auto_tune_soft_ce_sharpness,
-        )
-    
+        req_alpha = self.auto_tune_soft_ce_sharpness
+        if self.soft_ce_alpha_mode == "perbin":
+            # Option A: one learnable log-alpha per bin, gathered by ground-truth bin id.
+            self.log_soft_ce_alpha_bi = nn.Parameter(
+                torch.full((vocab_size,), init_log_alpha, dtype=torch.float32, device=self.device),
+                requires_grad=req_alpha,
+            )
+            self.log_soft_ce_alpha_ibg = nn.Parameter(
+                torch.full((vocab_size,), init_log_alpha, dtype=torch.float32, device=self.device),
+                requires_grad=req_alpha,
+            )
+        elif self.soft_ce_alpha_mode == "parametric":
+            # Option B: log-alpha = linear(per-bin width/center features). Weight=0,
+            # bias=init_log_alpha => initial alpha == soft_ce_alpha_init for every bin.
+            self.register_buffer(
+                "alpha_feat_bi", self._build_alpha_features(self.token_values_bi).to(self.device)
+            )
+            self.register_buffer(
+                "alpha_feat_ibg", self._build_alpha_features(self.token_values_ibg).to(self.device)
+            )
+            self.alpha_head_bi = nn.Linear(2, 1).to(self.device)
+            self.alpha_head_ibg = nn.Linear(2, 1).to(self.device)
+            with torch.no_grad():
+                for _head in (self.alpha_head_bi, self.alpha_head_ibg):
+                    nn.init.zeros_(_head.weight)
+                    nn.init.constant_(_head.bias, init_log_alpha)
+            for _p in list(self.alpha_head_bi.parameters()) + list(self.alpha_head_ibg.parameters()):
+                _p.requires_grad_(req_alpha)
+        else:  # "scalar" (legacy): one learnable log-alpha per stream
+            self.log_soft_ce_alpha_bi = nn.Parameter(
+                torch.tensor(init_log_alpha, dtype=torch.float32, device=self.device),
+                requires_grad=req_alpha,
+            )
+            self.log_soft_ce_alpha_ibg = nn.Parameter(
+                torch.tensor(init_log_alpha, dtype=torch.float32, device=self.device),
+                requires_grad=req_alpha,
+            )
+
+    @staticmethod
+    def _build_alpha_features(centers: torch.Tensor) -> torch.Tensor:
+        """Per-bin features for parametric soft-CE alpha: [z(log spacing), z(center)] -> [V, 2]."""
+        c = centers.detach().to(torch.float32)
+        spacing = torch.ones_like(c)
+        if c.numel() >= 3:
+            spacing[1:-1] = 0.5 * (c[2:] - c[:-2])
+            spacing[0] = c[1] - c[0]
+            spacing[-1] = c[-1] - c[-2]
+        spacing = spacing.abs().clamp_min(1e-9)
+        log_w = torch.log(spacing)
+
+        def _z(x: torch.Tensor) -> torch.Tensor:
+            return (x - x.mean()) / (x.std() + 1e-6)
+
+        return torch.stack([_z(log_w), _z(c)], dim=-1)
+
+    def _soft_ce_alpha(self, stream: str) -> torch.Tensor:
+        """Soft-CE sharpness alpha. Returns 0-dim (scalar mode) or [V] (perbin/parametric)."""
+        if self.soft_ce_alpha_mode == "parametric":
+            feat = getattr(self, f"alpha_feat_{stream}")
+            head = getattr(self, f"alpha_head_{stream}")
+            log_alpha = head(feat).squeeze(-1)
+        else:
+            log_alpha = getattr(self, f"log_soft_ce_alpha_{stream}")
+        return torch.exp(log_alpha).clamp(max=10000.0)
+
     def save_pretrained(self, save_directory: str):
         os.makedirs(save_directory, exist_ok=True)
 
@@ -594,14 +911,20 @@ class TwinHeadChronosPredictor(nn.Module):
             "center_clip": self.center_clip,
             "d_model": self.model.model.config.d_model,
             "use_cross_attn": self.use_cross_attn,
-            "soft_ce_alpha_init": float(torch.exp(self.log_soft_ce_alpha_bi).detach().cpu().item()),
+            "soft_ce_alpha_init": float(self._soft_ce_alpha("bi").mean().detach().cpu().item()),
+            "soft_ce_alpha_mode": self.soft_ce_alpha_mode,
             "soft_ce_denom_floor_bi": self.soft_ce_denom_floor_bi,
             "soft_ce_denom_floor_ibg": self.soft_ce_denom_floor_ibg,
             "auto_tune_soft_ce_sharpness": self.auto_tune_soft_ce_sharpness,
             "use_ce_loss": self.use_ce_loss,
             "loss_weight_bi": self.loss_weight_bi,
             "loss_weight_ibg": self.loss_weight_ibg,
+            "loss_weight_local_bi": self.loss_weight_local_bi,
+            "loss_weight_local_ibg": self.loss_weight_local_ibg,
+            "soft_ce_sigma_local": self.soft_ce_sigma_local,
+            "local_loss_min_context": self.local_loss_min_context,
             "ibg_integer_bins": int(self.ibg_integer_bins),
+            "num_local_bins": int(self.num_local_bins),
         }
 
         cfg_path = os.path.join(save_directory, "netburst_config.json")
@@ -612,6 +935,16 @@ class TwinHeadChronosPredictor(nn.Module):
     def from_pretrained(cls, load_directory: str, device: torch.device):
         # 1) Load wrapper config
         cfg_path = os.path.join(load_directory, "netburst_config.json")
+        if not os.path.exists(cfg_path):
+            # Backward-compatibility with older checkpoints saved as twinhead_config.json
+            legacy_cfg_path = os.path.join(load_directory, "twinhead_config.json")
+            if os.path.exists(legacy_cfg_path):
+                cfg_path = legacy_cfg_path
+            else:
+                raise FileNotFoundError(
+                    f"Missing config in {load_directory}. Expected 'netburst_config.json' "
+                    f"or legacy 'twinhead_config.json'."
+                )
         with open(cfg_path, "r") as f:
             cfg = json.load(f)
 
@@ -630,7 +963,13 @@ class TwinHeadChronosPredictor(nn.Module):
         use_ce_loss = cfg.get("use_ce_loss", False)
         loss_weight_bi = cfg.get("loss_weight_bi", 1.0)
         loss_weight_ibg = cfg.get("loss_weight_ibg", 1.0)
+        loss_weight_local_bi = cfg.get("loss_weight_local_bi", 0.0)
+        loss_weight_local_ibg = cfg.get("loss_weight_local_ibg", 0.0)
+        soft_ce_sigma_local = cfg.get("soft_ce_sigma_local", 1.5)
+        local_loss_min_context = cfg.get("local_loss_min_context", 16)
         ibg_integer_bins = int(cfg.get("ibg_integer_bins", 0))
+        num_local_bins = int(cfg.get("num_local_bins", 0))
+        soft_ce_alpha_mode = cfg.get("soft_ce_alpha_mode", "scalar")
 
         # 2) Recreate the module with *exactly* the same ctor args
         model = cls(
@@ -649,7 +988,13 @@ class TwinHeadChronosPredictor(nn.Module):
             use_ce_loss=use_ce_loss,
             loss_weight_bi=loss_weight_bi,
             loss_weight_ibg=loss_weight_ibg,
+            loss_weight_local_bi=loss_weight_local_bi,
+            loss_weight_local_ibg=loss_weight_local_ibg,
+            soft_ce_sigma_local=soft_ce_sigma_local,
+            local_loss_min_context=local_loss_min_context,
             ibg_integer_bins=ibg_integer_bins,
+            num_local_bins=num_local_bins,
+            soft_ce_alpha_mode=soft_ce_alpha_mode,
         )
 
         # 3) Load weights
@@ -668,6 +1013,8 @@ class TwinHeadChronosPredictor(nn.Module):
                 f"[WARN] from_pretrained: unexpected {len(unexpected)} key(s) when loading {weights_path}. "
                 f"First keys: {unexpected[:20]}"
             )
+        if hasattr(model, "model") and hasattr(model.model, "_tie_local_head_weights"):
+            model.model._tie_local_head_weights()
         model.to(device)
         model.eval()
         return model
@@ -678,6 +1025,44 @@ class TwinHeadChronosPredictor(nn.Module):
         bi_series  = [bi for (bi, _ibg) in batch_list]
         ibg_series = [ibg for (_bi, ibg) in batch_list]
         return bi_series, ibg_series
+
+    def _tokenize_dual_streams(self, ctx_bi, ctx_ibg):
+        """Tokenize BI/IBG global ids and optional per-series local ids."""
+        ids_bi, mask_bi, _ = self.tokenizer_bi.context_input_transform(ctx_bi)
+        ids_ibg, mask_ibg, _ = self.tokenizer_ibg.context_input_transform(ctx_ibg)
+        local_bi = local_ibg = None
+        local_mask_bi = local_mask_ibg = None
+        local_label_bi = local_label_ibg = None
+        local_label_mask_bi = local_label_mask_ibg = None
+        if self.num_local_bins > 0:
+            local_bi, local_mask_bi, _, edges_bi = self.local_binner_bi.context_input_transform(
+                ctx_bi, return_edges=True
+            )
+            local_ibg, local_mask_ibg, _, edges_ibg = self.local_binner_ibg.context_input_transform(
+                ctx_ibg, return_edges=True
+            )
+            local_label_bi, local_label_mask_bi = self.local_binner_bi.label_input_transform(
+                ctx_bi, edges_bi, append_eos=self.local_binner_bi.config.use_eos_token
+            )
+            local_label_ibg, local_label_mask_ibg = self.local_binner_ibg.label_input_transform(
+                ctx_ibg, edges_ibg, append_eos=self.local_binner_ibg.config.use_eos_token
+            )
+            assert local_bi.shape == ids_bi.shape and local_ibg.shape == ids_ibg.shape
+            assert local_label_bi.shape == local_bi.shape and local_label_ibg.shape == local_ibg.shape
+        return (
+            ids_bi,
+            mask_bi,
+            ids_ibg,
+            mask_ibg,
+            local_bi,
+            local_ibg,
+            local_mask_bi,
+            local_mask_ibg,
+            local_label_bi,
+            local_label_ibg,
+            local_label_mask_bi,
+            local_label_mask_ibg,
+        )
 
     def forward(self, batch_list):
         """
@@ -693,19 +1078,27 @@ class TwinHeadChronosPredictor(nn.Module):
         # Prepare separate contexts
         bi_series, ibg_series = self._prep_context(batch_list)
 
-        # Tokenize BI and IBG separately
-        ctx_bi  = self.pipeline._prepare_and_validate_context(context=bi_series)
-        ids_bi,  mask_bi,  _ = self.tokenizer_bi.context_input_transform(ctx_bi)
-
+        ctx_bi = self.pipeline._prepare_and_validate_context(context=bi_series)
         ctx_ibg = self.pipeline._prepare_and_validate_context(context=ibg_series)
-        ids_ibg, mask_ibg, _ = self.tokenizer_ibg.context_input_transform(ctx_ibg)
+        (
+            ids_bi,
+            mask_bi,
+            ids_ibg,
+            mask_ibg,
+            local_bi,
+            local_ibg,
+            local_mask_bi,
+            local_mask_ibg,
+            local_label_ids_bi,
+            local_label_ids_ibg,
+            local_label_mask_bi,
+            local_label_mask_ibg,
+        ) = self._tokenize_dual_streams(ctx_bi, ctx_ibg)
 
-        # Forward through Chronos for BI
         dummy = torch.empty((ids_bi.size(0), 1), dtype=torch.long, device=self.device)
-        # Use a combined padding mask so positions are valid only when both streams are valid
         comb_mask = (mask_bi & mask_ibg).to(self.device)
 
-        logits_bi_unused, hidden = self.model.forward_with_embeddings(
+        fwd_kw = dict(
             input_ids1=ids_bi.to(self.device),
             input_ids2=ids_ibg.to(self.device),
             attention_mask=comb_mask,
@@ -713,6 +1106,11 @@ class TwinHeadChronosPredictor(nn.Module):
             type_id=0,
             cross_attend=self.use_cross_attn,
         )
+        if local_bi is not None:
+            fwd_kw["local_ids1"] = local_bi.to(self.device)
+            fwd_kw["local_ids2"] = local_ibg.to(self.device)
+
+        logits_bi_unused, hidden = self.model.forward_with_embeddings(**fwd_kw)
         # shapes: logits_bi_unused: [B,1,T,V], hidden: [B,1,T,D]
         hidden = hidden.squeeze(1)  # [B,T,D]
 
@@ -725,6 +1123,21 @@ class TwinHeadChronosPredictor(nn.Module):
         logits_bi = self.head_bi(h_bi)[:, :-1, :]   # predict t+1 using state at t
         logits_ibg = self.head_ibg(h_ibg)[:, :-1, :]
 
+        logits_local_bi = logits_local_ibg = None
+        local_targets_bi = local_targets_ibg = None
+        local_valid_bi = local_valid_ibg = None
+        if self.num_local_bins > 0 and local_label_ids_bi is not None:
+            # Expose optional local-head logits for training-only auxiliary loss.
+            self.model._tie_local_head_weights()
+            local_heads_bi = self.model.heads(h_bi)
+            local_heads_ibg = self.model.heads(h_ibg)
+            logits_local_bi = local_heads_bi["logits_local_bi"][:, :-1, :]
+            logits_local_ibg = local_heads_ibg["logits_local_ibg"][:, :-1, :]
+            local_targets_bi = local_label_ids_bi[:, 1:].to(self.device)
+            local_targets_ibg = local_label_ids_ibg[:, 1:].to(self.device)
+            local_valid_bi = local_label_mask_bi[:, 1:].to(self.device)
+            local_valid_ibg = local_label_mask_ibg[:, 1:].to(self.device)
+
         targets_bi = ids_bi[:, 1:].to(self.device)
         targets_ibg = ids_ibg[:, 1:].to(self.device)
 
@@ -734,7 +1147,22 @@ class TwinHeadChronosPredictor(nn.Module):
         # Return context token ids for Fano-factor logging (input = ids[:, :-1])
         ids_bi = ids_bi.to(self.device)
         ids_ibg = ids_ibg.to(self.device)
-        return logits_bi, logits_ibg, targets_bi, targets_ibg, valid_bi, valid_ibg, ids_bi, ids_ibg
+        return (
+            logits_bi,
+            logits_ibg,
+            targets_bi,
+            targets_ibg,
+            valid_bi,
+            valid_ibg,
+            ids_bi,
+            ids_ibg,
+            logits_local_bi,
+            logits_local_ibg,
+            local_targets_bi,
+            local_targets_ibg,
+            local_valid_bi,
+            local_valid_ibg,
+        )
 
     def compute_loss(self, logits_bi, logits_ibg, targets_bi, targets_ibg, valid_bi, valid_ibg):
         # ----- CE branch: standard cross-entropy (hard targets) or soft CE (value-based weights) -----
@@ -750,7 +1178,8 @@ class TwinHeadChronosPredictor(nn.Module):
         else:
             # Soft cross-entropy over token IDs with value-based weights
             gt_vals_bi = self.token_values_bi[bi_tgt]                 # [N_valid_bi]
-            alpha_bi = torch.exp(self.log_soft_ce_alpha_bi).clamp(max=10000.0)
+            alpha_vec_bi = self._soft_ce_alpha("bi")
+            alpha_bi = alpha_vec_bi[bi_tgt].unsqueeze(1) if alpha_vec_bi.dim() > 0 else alpha_vec_bi
             denom_bi = torch.clamp(torch.abs(gt_vals_bi), min=self.soft_ce_denom_floor_bi)
             bin_vals_bi = self.token_values_bi.unsqueeze(0).expand(gt_vals_bi.size(0), -1)  # [N_valid_bi, V]
             rel_err_bi = torch.abs(bin_vals_bi - gt_vals_bi.unsqueeze(1)) / denom_bi.unsqueeze(1)
@@ -760,7 +1189,8 @@ class TwinHeadChronosPredictor(nn.Module):
             ce_bi = -(soft_targets_bi * log_probs_bi).sum(dim=-1).mean()
 
             gt_vals_ibg = self.token_values_ibg[ibg_tgt]               # [N_valid_ibg]
-            alpha_ibg = torch.exp(self.log_soft_ce_alpha_ibg).clamp(max=10000.0)
+            alpha_vec_ibg = self._soft_ce_alpha("ibg")
+            alpha_ibg = alpha_vec_ibg[ibg_tgt].unsqueeze(1) if alpha_vec_ibg.dim() > 0 else alpha_vec_ibg
             denom_ibg = torch.clamp(torch.abs(gt_vals_ibg), min=self.soft_ce_denom_floor_ibg)
             bin_vals_ibg = self.token_values_ibg.unsqueeze(0).expand(gt_vals_ibg.size(0), -1)  # [N_valid_ibg, V]
             rel_err_ibg = torch.abs(bin_vals_ibg - gt_vals_ibg.unsqueeze(1)) / denom_ibg.unsqueeze(1)
