@@ -28,6 +28,7 @@ NUM_TOKENS=4096
 CENTER_CLIP=1000000
 LR=1e-3
 IBG_INTEGER_BINS=-1
+NUM_LOCAL_BINS=0
 LOSS_WEIGHT_BI=1.0
 LOSS_WEIGHT_IBG=2.0
 
@@ -50,6 +51,7 @@ torchrun --nproc_per_node=4 pretrain_twin.py "${PARQUET_ROOT}" \
     --save_dir "${SAVE_DIR}" \
     --lr ${LR} \
     --ibg_integer_bins ${IBG_INTEGER_BINS} \
+    --num_local_bins ${NUM_LOCAL_BINS} \
     --use_ce_loss \
     --freeze_soft_ce_sharpness \
     --loss_weight_bi ${LOSS_WEIGHT_BI} \

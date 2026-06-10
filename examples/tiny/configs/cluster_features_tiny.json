@@ -1,0 +1,20 @@
+{
+  "runner": "local",
+  "environment": "local",
+  "job_name": "netburst_tiny_cluster_features",
+  "run_clustering_phase": false,
+  "clustering_csv": "examples/tiny/outputs/full_pipeline/analysis/clustering/k_4_labels.csv",
+  "tsfresh_csv": "examples/tiny/outputs/full_pipeline/analysis/tiny_tsfresh_features.csv",
+  "out_csv": "examples/tiny/outputs/full_pipeline/analysis/interpretability/invariance_scores.csv",
+  "cluster_variance_out_csv": "examples/tiny/outputs/full_pipeline/analysis/interpretability/cluster_variance.csv",
+  "cluster_feature_rank_out_csv": "examples/tiny/outputs/full_pipeline/analysis/interpretability/cluster_feature_rank.csv",
+  "min_cluster_size": 2,
+  "global_fisher_min": 0.0,
+  "id_ip": "ip",
+  "id_source_file": "source_file",
+  "ip_suffix_filter": null,
+  "write_cluster_member_samples": false,
+  "write_per_cluster_cohens_d_cka": true,
+  "run_normalized_cka_cohen": false,
+  "repr_prefix": "repr_dim"
+}

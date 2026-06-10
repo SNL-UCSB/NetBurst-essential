@@ -29,6 +29,7 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Dict
+from types import SimpleNamespace
 
 _ANALYSIS = Path(__file__).resolve().parent
 _ROOT = _ANALYSIS.parent.parent
@@ -126,9 +127,9 @@ def main() -> None:
         def_path = Path(os.path.expanduser(args.defaults)).resolve() if args.defaults else None
         merged = _load_merged_config(def_path, cfg_path)
         sys.path.insert(0, str(_ANALYSIS))
-        from global_cka_fisher_metrics import run_from_config_dict
+        from global_cka_fisher_metrics import run_global_cka
 
-        run_from_config_dict(merged)
+        run_global_cka(SimpleNamespace(**merged))
         return
 
     if args.command == "anisotropy":
@@ -136,9 +137,9 @@ def main() -> None:
         def_path = Path(os.path.expanduser(args.defaults)).resolve() if args.defaults else None
         merged = _load_merged_config(def_path, cfg_path)
         sys.path.insert(0, str(_ANALYSIS))
-        from anisotropy_scores import run_from_config_dict
+        from anisotropy_scores import run_anisotropy
 
-        run_from_config_dict(merged)
+        run_anisotropy(SimpleNamespace(**merged))
         return
 
     if args.command == "normalized-cka-cohen":

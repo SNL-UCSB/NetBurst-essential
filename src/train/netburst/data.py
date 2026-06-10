@@ -526,6 +526,7 @@ def load_ibg_bi_with_ip(
     parquet_root: str,
     allowed_ips: Optional[Set[str]] = None,
     min_len: int = 10,
+    ip_prefix_filter: Optional[str] = None,
     ip_suffix_filter: Optional[str] = None,
 ):
     """Load (bi, ibg) pairs preserving IP and source_file columns."""
@@ -541,6 +542,13 @@ def load_ibg_bi_with_ip(
 
     if allowed_ips and "ip" in df.columns:
         df = df.filter(F.col("ip").isin(list(allowed_ips)))
+
+    if ip_prefix_filter:
+        if "ip" not in df.columns:
+            print("Warning: --ip_prefix_filter set but parquet has no 'ip' column; prefix filter skipped.")
+        else:
+            df = df.filter(F.col("ip").startswith(ip_prefix_filter))
+            print(f"Applied ip prefix filter: startswith({ip_prefix_filter!r})")
 
     if ip_suffix_filter:
         if "ip" not in df.columns:

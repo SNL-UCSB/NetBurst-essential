@@ -450,6 +450,7 @@ def main():
                 gen.manual_seed(int(seed))
 
             for step in range(H):
+                # AR tuple decoder path: local residual not applied (see forward_with_embeddings).
                 _, hidden = predictor.model.forward_with_embeddings(
                     input_ids1=ids_bi,
                     input_ids2=ids_ibg,
@@ -560,15 +561,19 @@ def main():
         """
         try:
             # tokenize full context (drop EOS in targets step below, so keep EOS here like training)
-            bi_ctx = predictor.pipeline._prepare_and_validate_context(context=[torch.tensor(bi_vals, dtype=torch.float32)])
-            ids_bi, mask_bi, _ = predictor.tokenizer_bi.context_input_transform(bi_ctx)
-            ibg_ctx = predictor.pipeline._prepare_and_validate_context(context=[torch.tensor(ibg_vals, dtype=torch.float32)])
-            ids_ibg, mask_ibg, _ = predictor.tokenizer_ibg.context_input_transform(ibg_ctx)
+            bi_ctx = predictor.pipeline._prepare_and_validate_context(
+                context=[torch.tensor(bi_vals, dtype=torch.float32)]
+            )
+            ibg_ctx = predictor.pipeline._prepare_and_validate_context(
+                context=[torch.tensor(ibg_vals, dtype=torch.float32)]
+            )
+            ids_bi, mask_bi, ids_ibg, mask_ibg, local_bi, local_ibg = (
+                predictor._tokenize_dual_streams(bi_ctx, ibg_ctx)
+            )
 
-            # Combined valid mask and forward
             comb_mask = (mask_bi & mask_ibg).to(predictor.device)
             dummy = torch.empty((ids_bi.size(0), 1), dtype=torch.long, device=predictor.device)
-            _, hidden = predictor.model.forward_with_embeddings(
+            fwd_kw = dict(
                 input_ids1=ids_bi.to(predictor.device),
                 input_ids2=ids_ibg.to(predictor.device),
                 attention_mask=comb_mask,
@@ -576,6 +581,10 @@ def main():
                 type_id=0,
                 cross_attend=predictor.use_cross_attn,
             )
+            if local_bi is not None:
+                fwd_kw["local_ids1"] = local_bi.to(predictor.device)
+                fwd_kw["local_ids2"] = local_ibg.to(predictor.device)
+            _, hidden = predictor.model.forward_with_embeddings(**fwd_kw)
             h = hidden.squeeze(1)
             h_bi = predictor.stream_proj_bi(h)
             h_ibg = predictor.stream_proj_ibg(h)
